@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: clonalisa
+Version: 0.0.1
+Summary: Automated clonal colony & cell counter
+Author: TDJM
+Requires-Python: >=3.10
+Requires-Dist: omnipose-clonalisa@ git+https://github.com/timboGithubMan/omnipose-clonalisa@omnipose-custom-tyx-save

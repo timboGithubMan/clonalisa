@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clonalisa"
+version = "0.0.1"          # bump later when you publish
+description = "Automated clonal colony & cell counter"
+authors = [{name = "TDJM"}]
+requires-python = ">=3.10"
+
+dependencies = [
+  "omnipose-clonalisa @ git+https://github.com/timboGithubMan/omnipose-clonalisa@omnipose-custom-tyx-save"
+]
