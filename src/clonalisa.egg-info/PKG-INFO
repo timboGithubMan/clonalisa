@@ -4,4 +4,5 @@ Version: 0.0.1
 Summary: Automated clonal colony & cell counter
 Author: TDJM
 Requires-Python: >=3.10
-Requires-Dist: omnipose-clonalisa@ git+https://github.com/timboGithubMan/omnipose-clonalisa@omnipose-custom-tyx-save
+Requires-Dist: omnipose@ git+https://github.com/kevinjohncutler/omnipose@8bc0db3e63bea26fd8f043ffe6fb1889e5b3a405
+Requires-Dist: statsmodels<0.16,>=0.14

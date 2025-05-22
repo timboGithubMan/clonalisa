@@ -4,11 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clonalisa"
-version = "0.0.1"          # bump later when you publish
+version = "0.0.1"
 description = "Automated clonal colony & cell counter"
 authors = [{name = "TDJM"}]
 requires-python = ">=3.10"
 
 dependencies = [
-  "omnipose-clonalisa @ git+https://github.com/timboGithubMan/omnipose-clonalisa@omnipose-custom-tyx-save"
+  "omnipose @ git+https://github.com/kevinjohncutler/omnipose@8bc0db3e63bea26fd8f043ffe6fb1889e5b3a405",
+  # Statsmodels (needed for pairwise_tukeyhsd)
+  "statsmodels>=0.14,<0.16"
 ]
