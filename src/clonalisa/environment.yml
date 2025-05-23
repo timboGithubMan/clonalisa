@@ -1,0 +1,21 @@
+name: clonalisa
+channels:
+  - pytorch          # for the PyTorch metapackage
+  - nvidia           # for pytorch-cuda
+  - conda-forge      # everything else
+dependencies:
+  # — Python core —
+  - python=3.10.12
+  - pip
+
+  # — Deep-learning runtime —
+  - pytorch
+  - torchvision
+  - pytorch-cuda=11.8       # pulls in cudatoolkit 11.8 at ~400 MB
+
+  # — Minimal R runtime + only the libraries the script imports —
+  - r-base=4.3
+  
+  # — Project code (reads pyproject.toml) —
+  - pip:
+      - -e .

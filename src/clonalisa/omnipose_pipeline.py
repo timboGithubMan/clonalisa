@@ -7,6 +7,7 @@ import threading
 import queue
 from importlib.resources import files
 import measure_growth_rates
+import subprocess
 
 def producer(inputDir, subdir, outputDir, queue):
     subdir = make_multi_channels.make_multi_channels_reorder(inputDir, subdir, outputDir, 4)
@@ -33,7 +34,7 @@ def consumer(outputDir, lock, queue):
         dead_dir = None
         for model_info_array in PRETRAINED_MODEL_INFOS:
             try:
-                live_dir = omnipose_threaded.run_omnipose(merged_img_dir, model_info_array, num_threads=8)
+                live_dir = omnipose_threaded.run_omnipose(merged_img_dir, model_info_array, num_threads=8, save_flows=True)
                 results_csv = process_masks.process_mask_files(live_dir, CM_PER_PIXEL, PLATE_AREAS.get(PLATE_TYPE), force_save=False, filter_min_size=None)
             except Exception as e:
                 print(f"Error processing directory {merged_img_dir} with {model_info_array}: {e}")
@@ -74,7 +75,7 @@ DEAD_MODEL_INFO = [
 ]
     
 def main():
-    inputDirs = [r"E:\MERGED_20250515_RGF_ISO_SAG_GROWTH_ROUND2"]
+    inputDirs = [r"E:\test"]
 
     for inputDir in inputDirs:
         try:
@@ -82,25 +83,25 @@ def main():
             base_dir = r"E:/"
             output_dir = make_multi_channels.create_merged_directory(inputDir, base_dir)
 
-            # max_queue_size=999
-            # dir_queue = queue.Queue(maxsize=max_queue_size)
-            # lock = threading.Lock()
+            max_queue_size=999
+            dir_queue = queue.Queue(maxsize=max_queue_size)
+            lock = threading.Lock()
 
-            # consumer_threads = []  # List to keep track of threads
-            # for _ in range(1):  # Create and start consumer threads
-            #     consumer_thread = threading.Thread(target=consumer, args=(output_dir, lock, dir_queue))
-            #     consumer_thread.start()
-            #     consumer_threads.append(consumer_thread)
+            consumer_threads = []  # List to keep track of threads
+            for _ in range(1):  # Create and start consumer threads
+                consumer_thread = threading.Thread(target=consumer, args=(output_dir, lock, dir_queue))
+                consumer_thread.start()
+                consumer_threads.append(consumer_thread)
 
-            # producer_thread = threading.Thread(target=producer_worker, args=(inputDir, output_dir, dir_queue))
-            # producer_thread.start()
-            # producer_thread.join()
+            producer_thread = threading.Thread(target=producer_worker, args=(inputDir, output_dir, dir_queue))
+            producer_thread.start()
+            producer_thread.join()
 
-            # for _ in range(len(consumer_threads)):
-            #     dir_queue.put(None)
+            for _ in range(len(consumer_threads)):
+                dir_queue.put(None)
 
-            # for consumer_thread in consumer_threads:
-            #     consumer_thread.join()
+            for consumer_thread in consumer_threads:
+                consumer_thread.join()
 
             for model_info_array in PRETRAINED_MODEL_INFOS:
                 model_name = "_".join(model_info_array[0].split("_")[-8:])
@@ -108,19 +109,22 @@ def main():
                 dead_model_name = "_".join(DEAD_MODEL_INFO[0][0].split("_")[-8:]) if DEAD_MODEL_INFO else None
                 model_output_dir = os.path.join(os.path.join(output_dir,f'{model_name}'))
 
-                all_data_csv = process_masks.make_all_data_csv(output_dir, model_name)
-                per_well_data_csv_path = measure_growth_rates.calculate_growth_rates_per_well(all_data_csv, time_lower=80, time_upper=100)
-                group_columns =  [col for col in pd.read_csv(per_well_data_csv_path).columns if ("Group" in col and not "_Group" in col and not "merged" in col)]
+                # all_data_csv = process_masks.make_all_data_csv(output_dir, model_name)
 
-                import pandas as pd
-                per_well_data_csv_path = os.path.join(model_output_dir, f'{model_name}_per_well_data.csv')
-                group_columns =  [col for col in pd.read_csv(os.path.join(model_output_dir, f'{model_name}_per_well_data.csv')).columns if ("Group" in col and not "_Group" in col and not "merged" in col)]
+                # cmd = ["Rscript", r"C:\Users\Tim\clonalisa\src\clonalisa\interaction.R", "--args", all_data_csv] 
+                # subprocess.run(cmd, check=True)
+                # per_well_data_csv_path = measure_growth_rates.calculate_growth_rates_per_well(all_data_csv)
+                # group_columns =  [col for col in pd.read_csv(per_well_data_csv_path).columns if ("Group" in col and not "_Group" in col and not "merged" in col)]
 
-                for group_col in group_columns:
-                    measure_growth_rates.plot_over_time(per_well_data_csv_path, group_to_plot=group_col, y_values="exp_rate_cell_density", p_values_col="exp_rate_cell_density", log=True)
-                    measure_growth_rates.plot_over_time(per_well_data_csv_path, group_to_plot=group_col, y_values="logistic_k_corr_fit_cell_density", p_values_col="logistic_k_corr_fit_cell_density", log=True)
-                    measure_growth_rates.plot_over_time(per_well_data_csv_path, group_to_plot=group_col, y_values="logistic_k_CV_fit_cell_density", p_values_col="logistic_k_CV_fit_cell_density", log=True)
-                    measure_growth_rates.plot_over_time(per_well_data_csv_path, group_to_plot=group_col, y_values="cell_density", p_values_col="cell_density", log=True)
+                # import pandas as pd
+                # per_well_data_csv_path = os.path.join(model_output_dir, f'{model_name}_per_well_data.csv')
+                # group_columns =  [col for col in pd.read_csv(os.path.join(model_output_dir, f'{model_name}_per_well_data.csv')).columns if ("Group" in col and not "_Group" in col and not "merged" in col)]
+
+                # for group_col in group_columns:
+                #     measure_growth_rates.plot_over_time(per_well_data_csv_path, group_to_plot=group_col, y_values="exp_rate_cell_density", p_values_col="exp_rate_cell_density", log=True)
+                #     measure_growth_rates.plot_over_time(per_well_data_csv_path, group_to_plot=group_col, y_values="logistic_k_corr_fit_cell_density", p_values_col="logistic_k_corr_fit_cell_density", log=True)
+                #     measure_growth_rates.plot_over_time(per_well_data_csv_path, group_to_plot=group_col, y_values="logistic_k_CV_fit_cell_density", p_values_col="logistic_k_CV_fit_cell_density", log=True)
+                #     measure_growth_rates.plot_over_time(per_well_data_csv_path, group_to_plot=group_col, y_values="cell_density", p_values_col="cell_density", log=True)
 
         except:
             print(f'failed {inputDir}')
