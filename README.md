@@ -1,5 +1,5 @@
 ![ClonaLiSA](https://raw.githubusercontent.com/timboGithubMan/clonalisa/ebb9c1a510d5feccab17cfa6de91b3e2b310d534/logo.png)
-## Installation
+# Installation
 
 > **Prerequisites**  
 > * Install miniconda or anaconda if you don't already have conda installed  
