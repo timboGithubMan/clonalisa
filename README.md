@@ -16,8 +16,6 @@
 ```bash
 conda create -y -n clonalisa -c conda-forge python=3.10.12 r-base=4.3 pip
 conda activate clonalisa
-git clone https://github.com/timboGithubMan/clonalisa
-cd clonalisa
 ```
 
 ## Step 2 — Install PyTorch
@@ -44,6 +42,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 ## Step 3 — Install ClonaLiSA
 ```bash
+git clone https://github.com/timboGithubMan/clonalisa
+cd clonalisa
 pip install -e .
 ```
 
