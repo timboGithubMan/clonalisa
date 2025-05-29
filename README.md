@@ -11,38 +11,41 @@
 >> conda install git
 >> ```
 
-### 1 — Create & activate the environment!!
+## Step 1 — Setup environment
 
 ```bash
 conda create -y -n clonalisa -c conda-forge python=3.10.12 r-base=4.3 pip
 conda activate clonalisa
-```
-
-### 2 — Download and enter clonalisa repository!!
-
-```bash
 git clone https://github.com/timboGithubMan/clonalisa
 cd clonalisa
 ```
 
-### 3 — Install PyTorch and ClonaLisa!!
+## Step 2 — Install PyTorch
 
 Pick **one** command that matches your hardware:
 
 #### • CPU-only
 
 ```bash
-pip install torch torchvision torchaudio -e . --index-url https://download.pytorch.org/whl/cpu
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
 #### • CUDA 11.8 — most GPUs
 
 ```bash
-pip install torch torchvision torchaudio -e . --index-url https://download.pytorch.org/whl/cu118
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
 #### • CUDA 12.x — RTX 5000-series & newer
 
 ```bash
-pip install torch torchvision torchaudio -e . --index-url https://download.pytorch.org/whl/cu128
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
+
+## Step 3 — Install ClonaLiSA
+```bash
+pip install -e .
+```
+
+## Step 4
+watch your colonies self-organize into turquoise WGCNA cults
