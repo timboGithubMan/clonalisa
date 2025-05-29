@@ -11,21 +11,21 @@
 >> conda install git
 >> ```
 
-### 1 — Create & activate the environment
+### 1 — Create & activate the environment!!
 
 ```bash
 conda create -y -n clonalisa -c conda-forge python=3.10.12 r-base=4.3 pip
 conda activate clonalisa
 ```
 
-### 2 — Download and enter clonalisa repository
+### 2 — Download and enter clonalisa repository!!
 
 ```bash
 git clone https://github.com/timboGithubMan/clonalisa
 cd clonalisa
 ```
 
-### 3 — Install PyTorch and ClonaLisa
+### 3 — Install PyTorch and ClonaLisa!!
 
 Pick **one** command that matches your hardware:
 
