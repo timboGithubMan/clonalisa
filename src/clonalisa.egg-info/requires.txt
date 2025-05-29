@@ -1,2 +1,0 @@
-omnipose@ git+https://github.com/kevinjohncutler/omnipose@8bc0db3e63bea26fd8f043ffe6fb1889e5b3a405
-statsmodels<0.16,>=0.14
