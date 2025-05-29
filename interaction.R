@@ -1,5 +1,5 @@
 needed <- c("ggplot2","dplyr","stringr","forcats","tidyr",
-            "tibble","nlme","emmeans","broom.mixed","gridExtra")
+            "tibble","nlme","emmeans","broom.mixed","gridExtra", "codetools")
 
 to_get <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
 if (length(to_get))
@@ -16,14 +16,13 @@ library(tibble)
 library(gridExtra)
 library(tidyr)
 
-args = commandArgs(trailingOnly=TRUE)
-input_csv <- args[0]
+input_csv <- commandArgs(trailingOnly=TRUE)
 
 data <- read.csv(input_csv) %>%
   mutate(well      = PlateWell,
          genotype    = factor(Group.Line),
          treatment = factor(Group.Treatment),
-         treatment = relevel(treatment, "0.00uM DMSO"),
+         treatment = relevel(treatment, "DMSO"),
          subgroup = well
   ) %>%
   rename(
@@ -33,6 +32,15 @@ data <- read.csv(input_csv) %>%
   # filter(time < 80 | time > 100)
 output_dir <- file.path(dirname(input_csv), "model_treatment_genotype", "logistic_growth_by_genotype")
 if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+pdf(
+  file      = file.path(output_dir, "growth_summary.pdf"),  # goes in output_dir
+  width     = 11,            # 11 x 8.5 in  ⇒ landscape US-Letter
+  height    = 8.5,
+  onefile   = TRUE,          # keep adding pages
+  paper     = "special"      # let width/height rule (alt: paper = "USr" or "a4r")
+)
+on.exit(dev.off(), add = TRUE)   # closes the device even if the script errors
 
 data <- data %>% 
   arrange(subgroup, treatment, genotype, well, time) %>%          # make “first” reliable
@@ -302,7 +310,7 @@ emm_df <- as.data.frame(emm)
 # 2. Identify the 0.00uM DMSO row in every genotype (= control)
 # -------------------------------------------------------------
 ctrl_df <- emm_df %>% 
-  filter(treatment == "0.00uM DMSO") %>%                 # the control level
+  filter(treatment == "DMSO") %>%                 # the control level
   transmute(genotype,
             ctrl_emmean = emmean,
             ctrl_SE     = SE)
@@ -319,13 +327,13 @@ emm_df_pct <- emm_df %>%
 
 ## ----- contrasts & multiplicity correction  --------------------
 cts <- contrast(emm, "trt.vs.ctrl",          # treatment – 0.00uM DMSO inside genotype
-                ref = "0.00uM DMSO", by = "genotype")  # grouping factor
+                ref = "DMSO", by = "genotype")  # grouping factor
 
 cts_df <- summary(cts, infer = TRUE,         # adds CI and p.value
                   adjust = "bonferroni") |>
   as.data.frame() |>
   mutate(
-    treatment = str_remove(contrast, " - 0.00uM DMSO$"),   # "ANKRD12 - 0.00uM DMSO" → "ANKRD12"
+    treatment = str_remove(contrast, " - DMSO$"),   # "ANKRD12 - 0.00uM DMSO" → "ANKRD12"
     signif_label = case_when(
       p.value < 0.0001 ~ "****",
       p.value < 0.001 ~ "***",
@@ -339,7 +347,7 @@ cts_df <- summary(cts, infer = TRUE,         # adds CI and p.value
 ## merge the labels back
 emm_df_pct <- emm_df_pct |>
   left_join(cts_df, by = c("genotype", "treatment")) |>
-  mutate(signif_label = if_else(treatment == "0.00uM DMSO", "", signif_label))
+  mutate(signif_label = if_else(treatment == "DMSO", "", signif_label))
 
 # -------------------------------------------------------------
 # 5. (optional) order treatments within each genotype by effect size
@@ -447,9 +455,9 @@ plot_treatment_pct <- ggplot(emm_df_pct,
             position = position_dodge(width = 0.9),
             vjust = 0) +
   theme_classic(base_size = 12) +
-  labs(title = "Growth-rate vs matched 0.00uM DMSO",
+  labs(title = "Growth-rate vs matched DMSO",
        x     = "treatment",
-       y     = "Percent difference from matched 0.00uM DMSO (%)") +
+       y     = "Percent difference from matched DMSO (%)") +
   theme(axis.text.x  = element_text(angle = 45, hjust = 1),
         legend.position = "none")
 
