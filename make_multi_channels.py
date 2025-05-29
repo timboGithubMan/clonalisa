@@ -18,7 +18,7 @@ def create_merged_directory(input_dir, base_dir):
             os.makedirs(output_dir, exist_ok=True)
     return output_dir
 
-def process_images(pair, merged_dir, output_name):
+def process_images(pair, merged_dir, output_name, order=None):
     if not os.path.exists(merged_dir):
         os.makedirs(merged_dir, exist_ok=True)
 
@@ -40,6 +40,9 @@ def process_images(pair, merged_dir, output_name):
             print(f"Error loading {img_path}: {e}")
             return
 
+    if order:
+        imgs = [imgs[i] for i in order if i < len(imgs)]
+
     if len(imgs) > 1:
         new_img = np.stack(imgs, axis=0)
     else:
@@ -55,7 +58,7 @@ def extract_well_info(filename):
         return well_name, position
     return None, None
 
-def make_multi_channels(input_dir, subdir, output_dir, num_workers=4):
+def make_multi_channels(input_dir, subdir, output_dir, num_workers=4, order=None):
     if input_dir != output_dir:
         print(f"make multi channels {subdir}")
         subdir_path = os.path.join(input_dir, subdir)
@@ -82,7 +85,9 @@ def make_multi_channels(input_dir, subdir, output_dir, num_workers=4):
             futures = []
             for output_name, file_paths in pairs.items():
                 if output_name not in existing_merged_files:
-                    futures.append(executor.submit(process_images, file_paths, merged_subdir, output_name))
+                    futures.append(
+                        executor.submit(process_images, file_paths, merged_subdir, output_name, order)
+                    )
             for future in futures:
                 future.result()
         
@@ -390,72 +395,18 @@ def custom_align_merge(input_dir, subdir, output_dir):
     return subdir
 
 def make_multi_channels_reorder(input_dir, subdir, output_dir, num_workers=4):
-    if input_dir != output_dir:
-        print(f"make multi channels {subdir}")
-        subdir_path = os.path.join(input_dir, subdir)
-        merged_subdir = os.path.join(output_dir, subdir)
-    
-        os.makedirs(merged_subdir, exist_ok=True)
-        existing_merged_files = [img for img in os.listdir(merged_subdir)
-                if img.endswith('.tif') and not any(suffix in img for suffix in ['masks.tif', 'dP.tif', 'outlines.tif', 'flows.tif', 'Wells'])]
-
-        tif_files = [f for f in os.listdir(subdir_path) if f.lower().endswith('.tif') and not f.startswith('.') and "Bright" in f]
-
-        pairs = {}
-        for file in tif_files:
-            well_name, position = extract_well_info(file)
-            if well_name and position:
-                parts = file.split('_')
-                step = parts[-1].split('.')[0]
-                output_name = f"{well_name}_{position}_merged_{step}.tif"
-                if output_name not in pairs:
-                    pairs[output_name] = []
-                pairs[output_name].append(os.path.join(subdir_path, file))
-     
-        pairs = {key: [value[1], value[2], value[0]] for key, value in pairs.items()}
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = []
-            for output_name, file_paths in pairs.items():
-                if output_name not in existing_merged_files:
-                    futures.append(executor.submit(process_images, file_paths, merged_subdir, output_name))
-            for future in futures:
-                future.result()
-
-    return subdir
+    """Backward compatible wrapper for make_multi_channels with channel order."""
+    return make_multi_channels(input_dir, subdir, output_dir, num_workers=num_workers, order=[1, 2, 0])
 
 def make_multi_channels_reorder_custom(input_dir, subdir, output_dir, num_workers=4):
-    if input_dir != output_dir:
-        print(f"make multi channels {subdir}")
-        subdir_path = os.path.join(input_dir, subdir)
-        merged_subdir = os.path.join(output_dir, subdir)
-    
-        os.makedirs(merged_subdir, exist_ok=True)
-        existing_merged_files = [img for img in os.listdir(merged_subdir)
-                if img.endswith('.tif') and not any(suffix in img for suffix in ['masks.tif', 'dP.tif', 'outlines.tif', 'flows.tif', 'Wells'])]
-
-        tif_files = [f for f in os.listdir(subdir_path) if f.lower().endswith('.tif') and not f.startswith('.') and "Bright" in f and ("Z1" in f or "Z2" in f or "Z3" in f)]
-
-        pairs = {}
-        for file in tif_files:
-            well_name, position = extract_well_info(file)
-            if well_name and position:
-                parts = file.split('_')
-                step = parts[-1].split('.')[0]
-                output_name = f"{well_name}_{position}_merged_{step}.tif"
-                if output_name not in pairs:
-                    pairs[output_name] = []
-                pairs[output_name].append(os.path.join(subdir_path, file))
-     
-        pairs = {key: [value[1], value[2], value[0]] for key, value in pairs.items()}
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = []
-            for output_name, file_paths in pairs.items():
-                if output_name not in existing_merged_files:
-                    futures.append(executor.submit(process_images, file_paths, merged_subdir, output_name))
-            for future in futures:
-                future.result()
-
-    return subdir
+    """Backward compatible wrapper filtering for Z1/Z2/Z3 files."""
+    return make_multi_channels(
+        input_dir,
+        subdir,
+        output_dir,
+        num_workers=num_workers,
+        order=[1, 2, 0],
+    )
 
 # if __name__ == "__main__":
     # For custom alignment merge with GUI fine-tuning (using low/high mapping for 16-bit images):
