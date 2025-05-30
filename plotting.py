@@ -15,6 +15,10 @@ from datetime import datetime
 import shutil
 from typing import Dict, List, Tuple
 from scipy.stats import sem
+from math import ceil, sqrt
+from matplotlib.colors import LogNorm
+from natsort import natsorted
+from matplotlib.colors import ListedColormap
 
 
 def plot_all_plate_visualizations(input_csv, tp1, min_cells_tp1, tp2, min_cells_tp2):
@@ -2779,6 +2783,144 @@ def dying_ratio_by_plate_day(
         plt.close()
 
     return result
+
+def create_custom_viridis():
+    # Get 256 colors from viridis using the new API.
+    base = plt.colormaps['viridis'](np.linspace(0, 1, 256))
+    # Prepend black so that index 0 is black.
+    newcolors = np.vstack((np.array([0, 0, 0, 1]), base))
+    return ListedColormap(newcolors)
+
+def create_heatmaps(
+    csv_file: str,
+    value_col: str = "cell_density",
+    simple: bool = True,
+    histogram_bins = 60
+):
+    """
+    Creates a grid of heat-maps (one per well) **and** a histogram showing the distribution
+    of mean cell-densities across wells.
+
+    Parameters
+    ----------
+    csv_file : str
+        Path to the input CSV.
+    value_col : str
+        Column whose values are plotted.
+    simple : bool
+        Kept for API compatibility (unused here but left intact).
+    histogram_bins : int | str
+        Bin spec passed to `plt.hist`; default `"auto"` chooses a good rule automatically.
+    """
+
+    plt.switch_backend("Agg")   # compatibility with worker threads
+    plt.ioff()                  # turn off interactive mode
+
+    # ---------- Read & clean data ----------
+    df = pd.read_csv(csv_file)
+    df["Row"]    = df["Row"].str.upper().str[0].map(lambda x: ord(x) - ord("A")).astype(int)
+    df["Column"] = df["Well"].str.extract(r"(\d+)").astype(int)
+    if "Position" not in df.columns:
+        df["Position"] = 1
+    df["Position"]  = pd.to_numeric(df["Position"],  errors="coerce").astype(int)
+    df[value_col]   = pd.to_numeric(df[value_col],   errors="coerce")
+    df              = df.dropna(subset=["Row", "Column", "Position", value_col])
+
+    # ---------- Figure-out plate layout ----------
+    unique_rows = natsorted(df["Row"].unique())
+    unique_cols = natsorted(df["Column"].unique())
+    row_idx  = {r: i for i, r in enumerate(unique_rows)}
+    col_idx  = {c: i for i, c in enumerate(unique_cols)}
+    nrows, ncols = len(unique_rows), len(unique_cols)
+
+    fig_side = 5
+    fig_total, axs_total = plt.subplots(nrows, ncols,
+                                        figsize=(ncols * fig_side, nrows * fig_side),
+                                        squeeze=False)
+
+    # ---------- Colour normalisation ----------
+    non_zero  = df[df[value_col] > 0][value_col]
+    vmin      = non_zero.min() if not non_zero.empty else 1e-6
+    vmax      = non_zero.max() if not non_zero.empty else vmin * 10
+    norm      = LogNorm(vmin=vmin, vmax=vmax)         # use LogNormZeroReserved if you have it
+    cmap      = create_custom_viridis()
+
+    # ---------- Plot each well ----------
+    grouped = df.groupby("Well", sort=False)
+    for well, well_df in grouped:
+        well_df = well_df.sort_values("Position")
+
+        r, c    = int(well_df["Row"].iloc[0]), int(well_df["Column"].iloc[0])
+        ax      = axs_total[row_idx[r], col_idx[c]]
+
+        # fill a square grid with NaNs first
+        grid_n      = int(ceil(sqrt(well_df["Position"].max())))
+        heat        = np.full((grid_n, grid_n), np.nan)
+
+        pos0        = well_df["Position"] - 1
+        xs          = (pos0 % grid_n).astype(int)
+        ys          = (grid_n - 1 - (pos0 // grid_n)).astype(int)
+
+        heat[ys, xs] = well_df[value_col].to_numpy()
+
+        # stats
+        mean_val = np.nanmean(heat)
+        med_val  = np.nanmedian(heat)
+        std_val  = np.nanstd(heat)
+        cov_val  = std_val / mean_val if mean_val else np.nan
+
+        ax.imshow(
+            heat,
+            cmap=cmap,
+            norm=norm,
+            extent=[0, grid_n, 0, grid_n],
+            interpolation="nearest",
+            origin="lower",
+        )
+
+        for (yy, xx), val in np.ndenumerate(heat):
+            if np.isfinite(val):
+                ax.text(xx + .5, yy + .5, f"{val:.1f}",
+                        ha="center", va="center", fontsize=8,
+                        color="white", backgroundcolor="black")
+
+        ax.set_title(f"Well {well}\nμ={mean_val:.2f}, ẋ={med_val:.2f}, COV={cov_val:.2f}")
+        ax.set_xlim(0, grid_n); ax.set_ylim(0, grid_n)
+        ax.axis("off")
+
+    plt.tight_layout()
+
+    # ---------- Colour-bar ----------
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    fig_total.colorbar(sm, ax=axs_total.ravel().tolist(), shrink=0.5, extend="min")
+
+    # ---------- Save heat-map grid -----------
+    basename   = os.path.splitext(os.path.basename(csv_file))[0]
+    heat_path  = os.path.join(os.path.dirname(csv_file),
+                              f"{basename}_heatmap_{value_col}.png")
+    fig_total.savefig(heat_path, dpi=200)
+    plt.close(fig_total)
+    print(f"Saved heat-maps to {heat_path}")
+
+    # ======================================================================
+    #  NEW:  Histogram of mean density *per well*
+    # ======================================================================
+    per_well_means = grouped[value_col].mean().dropna()
+
+    fig_hist, ax_hist = plt.subplots(figsize=(6, 4))
+    ax_hist.hist(per_well_means, bins=histogram_bins)
+    ax_hist.set_xlabel(f"Mean {value_col} per well")
+    ax_hist.set_ylabel("Number of wells")
+    ax_hist.set_title("Histogram of per-well mean cell densities")
+    plt.tight_layout()
+
+    hist_path = os.path.join(os.path.dirname(csv_file),
+                             f"{basename}_histogram_{value_col}.png")
+    fig_hist.savefig(hist_path, dpi=200)
+    plt.close(fig_hist)
+    print(f"Saved histogram   to {hist_path}")
+
 
 def main():
     ground_truth_csv = r"E:\MERGED_sspsygene_growthassay_colonies\ground_truth.csv"
