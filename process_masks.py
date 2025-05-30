@@ -289,6 +289,10 @@ def create_heatmaps(
     histogram_bins : int | str
         Bin spec passed to `plt.hist`; default `"auto"` chooses a good rule automatically.
     """
+
+    plt.switch_backend("Agg")   # compatibility with worker threads
+    plt.ioff()                  # turn off interactive mode
+
     # ---------- Read & clean data ----------
     df = pd.read_csv(csv_file)
     df["Row"]    = df["Row"].str.upper().str[0].map(lambda x: ord(x) - ord("A")).astype(int)
@@ -368,7 +372,7 @@ def create_heatmaps(
     sm.set_array([])
     fig_total.colorbar(sm, ax=axs_total.ravel().tolist(), shrink=0.5, extend="min")
 
-    # ---------- Save heat-map grid ----------
+    # ---------- Save heat-map grid -----------
     basename   = os.path.splitext(os.path.basename(csv_file))[0]
     heat_path  = os.path.join(os.path.dirname(csv_file),
                               f"{basename}_heatmap_{value_col}.png")
@@ -417,10 +421,8 @@ def process_mask_files(masks_dir, cm_per_pixel, total_well_area, force_save=Fals
             if model_results['file'].any():
                 model_results.to_csv(csv_filepath, index=False)
                 print(f"Saved {csv_filepath}")
-        try:
-            create_heatmaps(csv_filepath, "cell_density")
-        except Exception as e:
-            print(f"failed to process heatmap cause {e}")
+
+        create_heatmaps(csv_filepath, "cell_density")
 
     return csv_filepath
 
@@ -441,28 +443,17 @@ def outline_cells_directory(img_directory, live_directory, dead_directory=None, 
 
         color_and_outline_cells_per_channel(img_path, live_mask_path, dead_mask_path, channel=channel)
 
-def color_and_outline_cells_per_channel(img_path, green_masks_path, red_masks_path=None, alpha=0.9, beta=0.1, gamma=0, thickness=3, quality=90, channel=2):
+def color_and_outline_cells_per_channel(output_img_path, img, green_masks, red_masks=None, alpha=0.9, beta=0.1, gamma=0, thickness=3, quality=80, channel=2):
     try:
-        # Determine the output directory based on the green_masks_path
-        output_dir = os.path.join(os.path.dirname(green_masks_path), "colored_and_outlined_cells")
-        os.makedirs(output_dir, exist_ok=True)
-        
+        os.makedirs(os.path.dirname(output_img_path), exist_ok=True)
+
         # Define the channel indices you want to process
         channel_indices = [channel]  # Modify this list if you want to process more channels
         
         for channel_idx in channel_indices:
-            # Construct the output image path
-            base_name = os.path.splitext(os.path.basename(img_path))[0]
-            output_img_filename = f"{base_name}_channel_{channel_idx}.jpg"
-            output_img_path = os.path.join(output_dir, output_img_filename)
-            
             # Check if the output file already exists
             if os.path.exists(output_img_path):
                 continue  # Skip to the next channel if the output exists
-            
-            # Proceed with processing since the output does not exist
-            print(img_path)
-            img = imread(img_path).astype(np.float32)
             
             # Handle image dimensions
             if img.ndim == 2:
@@ -471,14 +462,7 @@ def color_and_outline_cells_per_channel(img_path, green_masks_path, red_masks_pa
                 img = img[[0, 1, 3], :, :]
             elif img.ndim == 3 and img.shape[0] != 3:
                 raise ValueError("Image has 3 dimensions but does not have 3 channels")
-            
-            # Read mask images
-            green_masks = cv2.imread(green_masks_path, cv2.IMREAD_UNCHANGED)
-            if red_masks_path is not None:
-                red_masks = cv2.imread(red_masks_path, cv2.IMREAD_UNCHANGED)
-            else:
-                red_masks = np.zeros_like(green_masks)
-            
+    
             # Extract and normalize the specific channel
             channel_img = img[channel_idx, :, :]
             low = np.percentile(channel_img, 1)
@@ -499,7 +483,7 @@ def color_and_outline_cells_per_channel(img_path, green_masks_path, red_masks_pa
             green_overlay[green_masks > 0] = [0, 255, 0]
             
             # Apply red mask if provided
-            if red_masks_path is not None:
+            if red_masks is not None:
                 red_overlay[red_masks > 0] = [0, 0, 255]
             
             # Blend the overlays with the original image
@@ -518,7 +502,7 @@ def color_and_outline_cells_per_channel(img_path, green_masks_path, red_masks_pa
             shaded_img[outlines_green > 0] = [0, 255, 0]
             
             # Apply red outlines if red_masks_path is provided
-            if red_masks_path is not None:
+            if red_masks is not None:
                 dilated_red = cv2.dilate(red_masks, kernel)
                 outlines_red = dilated_red - red_masks
                 shaded_img[outlines_red > 0] = [0, 0, 255]
@@ -527,7 +511,7 @@ def color_and_outline_cells_per_channel(img_path, green_masks_path, red_masks_pa
             cv2.imwrite(str(output_img_path), shaded_img, [cv2.IMWRITE_JPEG_QUALITY, quality])
     
     except Exception as e:
-        print(f"Error processing {img_path}: {e}")
+        print(f"Error processing {output_img_path}: {e}")
 
 def outline_cells_per_channel(img_path, green_masks_path, red_masks_path, thickness=3, quality=60, model_name=""):
     try:

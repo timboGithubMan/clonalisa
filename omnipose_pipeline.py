@@ -3,9 +3,24 @@ import omnipose_threaded
 import process_masks
 from importlib.resources import files
 
+MAX_WORKERS = os.cpu_count() // 2
 PLATE_TYPE = "96W"
 MAGNIFICATION = "10x"
 CYTATION = True
+INPUT_DIRS = [r"Z:\Wellslab\Cytation_overflow_040723\20250529_DSSA_LUHMES_PreExposure"]
+CHANNEL_ORDER = [1, 2, 0]
+
+PRETRAINED_MODEL_INFOS = [
+    [os.path.join(("omnipose_models"),
+         "10x_NPC_nclasses_2_nchan_3_dim_2_2024_03_29_02_03_10.875324_epoch_960"), 0.4, 0],
+]
+
+DEAD_MODEL_INFO = [
+    # [os.path.join(("omnipose_models"),
+    #      "dead_nclasses_2_nchan_3_dim_2_ded_2025_03_07_02_10_15.252341_epoch_3999"), 0.4, 0],
+]
+
+
 PLATE_AREAS = {"6W": 9.6, "12W": 3.8, "24W": 2, "48W": 1.1, "96W": 0.32}
 CM_PER_MICRON = 1 / 10000
 if CYTATION:
@@ -21,18 +36,6 @@ else:
 
 CM_PER_PIXEL = CM_PER_MICRON * MICRONS_PER_PIXEL
 
-PRETRAINED_MODEL_INFOS = [
-    [str(files("clonalisa").joinpath("omnipose_models") /
-         "10x_NPC_nclasses_2_nchan_3_dim_2_2024_03_29_02_03_10.875324_epoch_960"), 0.4, 0],
-]
-
-DEAD_MODEL_INFO = [
-    [str(files("clonalisa").joinpath("omnipose_models") /
-         "dead_nclasses_2_nchan_3_dim_2_ded_2025_03_07_02_10_15.252341_epoch_3999"), 0.4, 0],
-]
-
-CHANNEL_ORDER = [1, 2, 0]
-
 
 def process_directory(input_dir: str) -> None:
     subdirs = [d for d in os.listdir(input_dir)
@@ -43,9 +46,8 @@ def process_directory(input_dir: str) -> None:
             live_dir = omnipose_threaded.run_omnipose(
                 dir_path,
                 model_info,
-                num_threads=8,
-                channel_order=CHANNEL_ORDER,
-                save_flows=True,
+                num_threads=MAX_WORKERS,
+                channel_order=CHANNEL_ORDER
             )
             process_masks.process_mask_files(
                 live_dir,
@@ -58,7 +60,7 @@ def process_directory(input_dir: str) -> None:
             dead_dir = omnipose_threaded.run_omnipose(
                 dir_path,
                 DEAD_MODEL_INFO[0],
-                num_threads=8,
+                num_threads=MAX_WORKERS,
                 channel_order=CHANNEL_ORDER,
             )
             process_masks.process_mask_files(
@@ -71,8 +73,7 @@ def process_directory(input_dir: str) -> None:
 
 
 def main() -> None:
-    input_dirs = [r"E:\\test"]
-    for input_dir in input_dirs:
+    for input_dir in INPUT_DIRS:
         try:
             print(f"starting {input_dir}")
             process_directory(input_dir)

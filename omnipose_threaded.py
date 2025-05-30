@@ -15,6 +15,7 @@ from importlib.resources import files
 # from omnipose import utils # utils is not used
 from cellpose_omni import models, core
 import cellpose_omni.io
+from process_masks import color_and_outline_cells_per_channel
 
 core.use_gpu()
 
@@ -61,31 +62,20 @@ def _load_and_merge(paths: list[Path], order: Sequence[int] | None, crop_size: i
 
 def _load_model(model_info: tuple[str, float, float]):
     """
-    model_info = (filename, flow_threshold, mask_threshold)
-
-    filename must exist inside clonalisa/omnipose_models/
-    (they're shipped with the wheel).
+    model_info = (file path, flow_threshold, mask_threshold)
     """
-    weights_path = (
-        files("clonalisa")
-        .joinpath("omnipose_models")
-        .joinpath(model_info[0])
-    )
-
-    if not weights_path.exists():
-        raise FileNotFoundError(f"Model weights not found: {weights_path}")
-
+    model_filepath, flow_thresh, mask_thresh = model_info
     try:
-        nchan = int(model_info[0].split("nchan_")[1][0])
-    except Exception as e:  # pragma: no cover
+        nchan = int(os.path.basename(model_filepath).split("nchan_")[1][0])
+    except Exception as e:
         raise ValueError(
             "Cannot parse nchan from model filename "
             f"‘{model_info[0]}’"
         ) from e
 
-    print(f"→ loading model {weights_path.name}  (nchan={nchan})")
+    print(f"→ loading model {os.path.basename(model_filepath)}  (nchan={nchan})")
     return models.CellposeModel(
-         pretrained_model=str(weights_path),
+         pretrained_model=model_info[0],
          nclasses=2,
          nchan=nchan,
          gpu=True if models.torch.cuda.is_available() else False # Simpler: core.use_gpu() is already called
@@ -97,7 +87,7 @@ def _run_on_subset(
     model_info: tuple[str, float, float],
     out_dir: Path,
     channel_order: Sequence[int] | None,
-    save_cellProb=True,
+    save_cellProb=False,
     save_flows=False,
     save_outlines=False,
 ):
@@ -105,7 +95,7 @@ def _run_on_subset(
     Worker entry-point.
     """
     
-    model_filename, flow_thresh, mask_thresh = model_info
+    model_filepath, flow_thresh, mask_thresh = model_info
     model = _load_model(model_info)
 
     for img_idx, (name, paths) in enumerate(groups):
@@ -135,12 +125,11 @@ def _run_on_subset(
                 cell_prob_map = flows[2]
                 scaled_prob_map = np.clip(cell_prob_map * 21.25, 0, 255).astype(np.uint8)
                 cellpose_omni.io.imwrite(out_dir / f"{name}_cellProb.png", scaled_prob_map)
-            else:
-                print(f"Warning: Could not extract cell_prob_map for {name}")
             if save_flows and flows is not None and len(flows) > 2 and flows[0] is not None:
                 cellpose_omni.io.imwrite(out_dir / f"{name}_flows.png", flows[0].astype(np.uint8))
-            else:
-                print(f"Warning: Could not extract flows_rgb_map for {name}")
+            if save_outlines and masks is not None:
+                color_and_outline_cells_per_channel(out_dir / "outlines" / f"{name}_outlines.jpg", img, masks)
+
 
             print(f"✓ {name}")
 
@@ -156,9 +145,9 @@ def run_omnipose(
     model_info: tuple[str, float, float],
     *,
     channel_order: Sequence[int] | None = None,
-    save_cellProb: bool = True,
+    save_cellProb: bool = False,
     save_flows: bool = False,
-    save_outlines: bool = False,
+    save_outlines: bool = True,
     num_threads: int = 4,
 ) -> Path:
     """
