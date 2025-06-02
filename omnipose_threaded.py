@@ -118,7 +118,7 @@ def _run_on_subset(
     groups: list[tuple[str, list[Path]]],
     model_info: tuple[str, float, float],
     out_dir: Path,
-    channel_order: Sequence[int] | None,
+    z_indices: Sequence[int] | None,
     save_cellProb=False,
     save_flows=False,
     save_outlines=False,
@@ -133,7 +133,7 @@ def _run_on_subset(
     for img_idx, (name, paths) in enumerate(groups):
         current_image_name = name  # For logging
         try:
-            img = _load_and_merge(paths, channel_order)
+            img = _load_and_merge(paths, z_indices)
             img_data = [img]  # model.eval expects a list of images
             masks_list, flows_list, _ = model.eval(
                 img_data, # List containing a single image
@@ -176,7 +176,6 @@ def run_omnipose(
     directory: str | Path,
     model_info: tuple[str, float, float],
     *,
-    channel_order: Sequence[int] | None = None,
     filter_keyword: str = "bright",
     z_indices: Sequence[int] | None = None,
     save_cellProb: bool = False,
@@ -244,7 +243,7 @@ def run_omnipose(
                 chunks,
                 repeat(model_info),
                 repeat(out_dir),
-                repeat(channel_order),
+                repeat(z_indices),
                 repeat(save_cellProb),
                 repeat(save_flows),
                 repeat(save_outlines),

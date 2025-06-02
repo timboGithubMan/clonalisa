@@ -3,20 +3,19 @@ import os
 import subprocess
 from pathlib import Path
 
+import omnipose_threaded
+import process_masks
+
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QTextEdit
 )
-
-import omnipose_threaded
-import process_masks
 
 # Constants similar to simple_omnipose_gui
 MAX_WORKERS = os.cpu_count() // 2
 PLATE_TYPE = "96W"
 MAGNIFICATION = "10x"
 CYTATION = True
-CHANNEL_ORDER = [1, 2, 0]
 
 PLATE_AREAS = {"6W": 9.6, "12W": 3.8, "24W": 2, "48W": 1.1, "96W": 0.32}
 CM_PER_MICRON = 1 / 10000
@@ -34,10 +33,10 @@ else:
 CM_PER_PIXEL = CM_PER_MICRON * MICRONS_PER_PIXEL
 
 
-class OmniposeGUI(QWidget):
+class clonalisaGUI(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Omnipose Pipeline (Qt)")
+        self.setWindowTitle("ClonaLiSA")
         self.resize(600, 400)
         self._setup_ui()
 
@@ -160,7 +159,6 @@ class OmniposeGUI(QWidget):
                 sub_path,
                 model_info,
                 num_threads=MAX_WORKERS,
-                channel_order=CHANNEL_ORDER,
                 filter_keyword=filt,
                 z_indices=z_indices,
                 save_flows=self.cb_flows.isChecked(),
@@ -187,7 +185,7 @@ class OmniposeGUI(QWidget):
             return
         script = Path(__file__).with_name("interaction.R")
         cmd = ["Rscript", str(script), csv_path]
-        self._append_log("Running Rscript interact.R ...")
+        self._append_log("Running Growth Rate Analysis R script...")
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, check=True)
             self._append_log(out.stdout)
@@ -200,7 +198,7 @@ class OmniposeGUI(QWidget):
 
 def main() -> None:
     app = QApplication([])
-    gui = OmniposeGUI()
+    gui = clonalisaGUI()
     gui.show()
     app.exec()
 
