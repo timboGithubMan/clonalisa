@@ -1,4 +1,5 @@
 import os
+import json
 import numpy as np
 import pandas as pd
 from tifffile import imread, imsave
@@ -19,8 +20,31 @@ from datetime import datetime
 from itertools import product, combinations
 import glob
 from plotting import create_heatmaps
+from config_utils import load_config, parse_filename, extract_time_from_folder as cfg_extract_time_from_folder, get_image_time
+from pathlib import Path
+
+
+def find_source_image(mask_filepath: str | Path) -> Path | None:
+    """Return the original image used to create *mask_filepath* if known."""
+    mask_path = Path(mask_filepath)
+    mapping_file = mask_path.parent / "source_images.json"
+    if mapping_file.exists():
+        try:
+            with open(mapping_file, "r") as f:
+                mapping = json.load(f)
+            key = mask_path.stem.replace("_cp_masks", "")
+            paths = mapping.get(key)
+            if paths:
+                return Path(paths[0])
+        except Exception:
+            pass
+    # Fallback to previous heuristic
+    img_dir = mask_path.parents[2]
+    img_name = mask_path.name.replace("_cp_masks.png", ".tif")
+    return img_dir / img_name
 
 def extract_metrics(mask_filepath, area, total_well_area, filter_min_size=None):
+    cfg = load_config()
     if filter_min_size:
         #Filter masks by size (get rid of weird artifacts)
         unfiltered_dir = os.path.join(os.path.dirname(mask_filepath), "unfiltered_masks")
@@ -51,7 +75,20 @@ def extract_metrics(mask_filepath, area, total_well_area, filter_min_size=None):
         else:
             masks = imread(mask_filepath)
 
-    well, row, column, pos = extract_well_info(mask_filepath)
+    src_img = find_source_image(mask_filepath)
+    if src_img:
+        well, position, channel, z, _ = parse_filename(src_img.name, cfg)
+    else:
+        m = re.match(r"(?P<well>[A-Za-z]+\d+)_pos(?P<position>\d+)_merged_(?P<step>\d+)", os.path.basename(mask_filepath))
+        well = m.group('well') if m else None
+        position = m.group('position') if m else None
+    if well:
+        m2 = re.match(r"([A-Za-z]+)(\d+)", well)
+        row = m2.group(1) if m2 else None
+        column = m2.group(2) if m2 else None
+    else:
+        row = column = None
+    pos = position
 
     # Count masks
     labels = np.unique(masks)
@@ -75,15 +112,14 @@ def extract_metrics(mask_filepath, area, total_well_area, filter_min_size=None):
     return results
 
 def extract_well_info(file_path):
-    match = re.match(r"([A-Za-z]+)(\d+)_pos(\d+)", os.path.basename(file_path))
-    if match:
-        well = match.group(1) + match.group(2)
-        row = match.group(1)
-        column = match.group(2)
-        pos = match.group(3)
-        return well, row, column, pos
-    else:
-        return None, None, None, None
+    cfg = load_config()
+    well, position, _, _, _ = parse_filename(os.path.basename(file_path), cfg)
+    if well and position:
+        m = re.match(r"([A-Za-z]+)(\d+)", well)
+        row = m.group(1) if m else None
+        column = m.group(2) if m else None
+        return well, row, column, position
+    return None, None, None, None
 
 def natural_sort_wells(well):
     match = re.match(r"([A-Za-z]+)([0-9]+)", well)
@@ -98,15 +134,7 @@ def extract_column_number(column_label):
     return int(''.join(filter(str.isdigit, column_label)))
 
 def extract_time_from_folder(folder_name):
-    """
-    Example function you provided to parse date/time from folder name
-    which is assumed to end with _YYYYMMDD_HHMMSS.
-    """
-    folder_name = folder_name.rstrip('\\/')  # remove trailing slash
-    parts = folder_name.split('_')
-    date_str = parts[-2]
-    time_str = parts[-1]
-    return datetime.strptime(f'{date_str} {time_str}', '%Y%m%d %H%M%S')
+    return cfg_extract_time_from_folder(folder_name)
 
 def find_previous_timepoint_csv(current_csv_file):
     """
@@ -607,30 +635,48 @@ def plot_cumulative_intensity(csv_file):
 def make_all_data_csv(input_folder, model_name=None):
     if not model_name:
         return None
+
+    cfg = load_config()
     all_data = []
-    min_time = None
 
     for subdir in glob.glob(os.path.join(input_folder, '*/')):
         try:
-            time = extract_time_from_folder(subdir)
-            if min_time is None or time < min_time:
-                min_time = time
+            folder_time = extract_time_from_folder(os.path.basename(subdir.rstrip('/')), cfg)
 
             for root, _, files in os.walk(subdir):
-                for file in files:  
+                for file in files:
                     if file.endswith('.csv') and (model_name in file):
                         data = pd.read_csv(os.path.join(root, file))
-                        data['Time'] = time
+                        times = []
+                        for mask_fp in data['file_path']:
+                            src_img = find_source_image(mask_fp)
+                            if cfg.get('time_source', 'folder') == 'date_created':
+                                t = get_image_time(src_img, cfg) if src_img else None
+                                if t is None:
+                                    t = folder_time
+                            else:
+                                t = folder_time
+                                if t is None and src_img:
+                                    t = get_image_time(src_img, cfg)
+                            times.append(t)
+                        data['Time'] = times
                         all_data.append(data)
-        except:
+        except Exception:
             print(f"skipping{subdir}")
 
     output_folder = os.path.join(input_folder, f"{model_name}")
     os.makedirs(output_folder, exist_ok=True)
 
-    # Combine all data frames into one and compute 'Relative Time (hrs)'
     combined_data = pd.concat(all_data, ignore_index=True)
-    combined_data['Relative Time (hrs)'] = ((combined_data['Time'] - min_time).dt.total_seconds() / 3600).astype(float)
+    combined_data['Time'] = pd.to_datetime(combined_data['Time'])
+    combined_data.sort_values(['Well', 'Time'], inplace=True)
+    combined_data['Relative Time (hrs)'] = (
+        combined_data.groupby('Well')['Time']
+        .diff()
+        .dt.total_seconds()
+        .div(3600)
+    )
+    combined_data['Relative Time (hrs)'] = combined_data['Relative Time (hrs)'].fillna(0).astype(float)
     combined_data.drop(columns='Time', inplace=True)
 
     # Extract 'Plate', 'Row', 'Column', and 'PlateWell' information
