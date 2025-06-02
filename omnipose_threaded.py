@@ -4,7 +4,6 @@ import concurrent.futures as cf
 import random
 import time
 import os
-import re
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -16,16 +15,15 @@ from importlib.resources import files
 from cellpose_omni import models, core
 import cellpose_omni.io
 from process_masks import color_and_outline_cells_per_channel
+from config_utils import parse_filename
 
 core.use_gpu()
 
 
 def _extract_well_info(filename: str):
-    match = re.match(r"([A-Z]\d+)_pos(\d+)(Z\d+)?", filename)
-    if match:
-        well_name = match.group(1)
-        position = f"pos{match.group(2)}"
-        return well_name, position
+    well, position, _, _ = parse_filename(filename)
+    if well and position:
+        return well, f"pos{position}"
     return None, None
 
 
@@ -62,11 +60,8 @@ def _collect_image_groups(
             groups.setdefault(output_name, []).append(directory / file)
 
     for name, paths in list(groups.items()):
-        # sort by Z index if present
         paths.sort(
-            key=lambda p: int(re.search(r"Z(\d+)", p.stem).group(1))
-            if re.search(r"Z(\d+)", p.stem)
-            else 0
+            key=lambda p: (parse_filename(p.name)[3] or 0)
         )
         if z_indices is not None:
             groups[name] = [p for idx, p in enumerate(paths) if idx in z_indices]

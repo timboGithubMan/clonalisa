@@ -19,8 +19,11 @@ from datetime import datetime
 from itertools import product, combinations
 import glob
 from plotting import create_heatmaps
+from config_utils import load_config, parse_filename, extract_time_from_folder as cfg_extract_time_from_folder, get_image_time
+from pathlib import Path
 
 def extract_metrics(mask_filepath, area, total_well_area, filter_min_size=None):
+    cfg = load_config()
     if filter_min_size:
         #Filter masks by size (get rid of weird artifacts)
         unfiltered_dir = os.path.join(os.path.dirname(mask_filepath), "unfiltered_masks")
@@ -51,11 +54,23 @@ def extract_metrics(mask_filepath, area, total_well_area, filter_min_size=None):
         else:
             masks = imread(mask_filepath)
 
-    well, row, column, pos = extract_well_info(mask_filepath)
+    well, position, channel, z = parse_filename(os.path.basename(mask_filepath), cfg)
+    if well:
+        m = re.match(r"([A-Za-z]+)(\d+)", well)
+        row = m.group(1) if m else None
+        column = m.group(2) if m else None
+    else:
+        row = column = None
+    pos = position
 
     # Count masks
     labels = np.unique(masks)
     mask_count = len(labels[labels != 0])
+
+    img_dir = Path(mask_filepath).parents[2]
+    img_name = Path(mask_filepath).name.replace('_cp_masks.png', '.tif')
+    image_path = img_dir / img_name
+    time_val = get_image_time(image_path, cfg)
 
     results = {
         'file_path' : mask_filepath,
@@ -70,20 +85,20 @@ def extract_metrics(mask_filepath, area, total_well_area, filter_min_size=None):
         'Well' : well,
         'Row' : row,
         "Column" : column,
-        'Position' : pos
+        'Position' : pos,
+        'Time' : time_val.isoformat() if time_val else None
     }
     return results
 
 def extract_well_info(file_path):
-    match = re.match(r"([A-Za-z]+)(\d+)_pos(\d+)", os.path.basename(file_path))
-    if match:
-        well = match.group(1) + match.group(2)
-        row = match.group(1)
-        column = match.group(2)
-        pos = match.group(3)
-        return well, row, column, pos
-    else:
-        return None, None, None, None
+    cfg = load_config()
+    well, position, _, _ = parse_filename(os.path.basename(file_path), cfg)
+    if well and position:
+        m = re.match(r"([A-Za-z]+)(\d+)", well)
+        row = m.group(1) if m else None
+        column = m.group(2) if m else None
+        return well, row, column, position
+    return None, None, None, None
 
 def natural_sort_wells(well):
     match = re.match(r"([A-Za-z]+)([0-9]+)", well)
@@ -98,15 +113,7 @@ def extract_column_number(column_label):
     return int(''.join(filter(str.isdigit, column_label)))
 
 def extract_time_from_folder(folder_name):
-    """
-    Example function you provided to parse date/time from folder name
-    which is assumed to end with _YYYYMMDD_HHMMSS.
-    """
-    folder_name = folder_name.rstrip('\\/')  # remove trailing slash
-    parts = folder_name.split('_')
-    date_str = parts[-2]
-    time_str = parts[-1]
-    return datetime.strptime(f'{date_str} {time_str}', '%Y%m%d %H%M%S')
+    return cfg_extract_time_from_folder(folder_name)
 
 def find_previous_timepoint_csv(current_csv_file):
     """
