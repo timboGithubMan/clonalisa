@@ -5,6 +5,8 @@ from tkinter import filedialog, messagebox
 import omnipose_threaded
 import process_masks
 
+import subprocess, sys, pathlib
+
 # Constants from omnipose_pipeline
 MAX_WORKERS = os.cpu_count() // 2
 PLATE_TYPE = "96W"
@@ -52,7 +54,7 @@ def run_pipeline(input_dir: str, model_file: str, *, save_flows: bool,
             force_save=False,
             filter_min_size=None,
         )
-
+    all_data_csv = process_masks.make_all_data_csv(input_dir, os.path.basename(model_info[0]))
 
 def launch_gui() -> None:
     root = tk.Tk()

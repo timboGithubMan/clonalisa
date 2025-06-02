@@ -170,10 +170,7 @@ def run_omnipose(
     if not directory.is_dir():
         raise NotADirectoryError(directory)
 
-    out_dir = directory / "model_outputs" / (
-        "_".join(model_info[0].split("_")[-8:])
-        + f"_{model_info[1]}_{model_info[2]}"
-    )
+    out_dir = directory / "model_outputs" /(os.path.basename(model_info[0]) + f"_{model_info[1]}_{model_info[2]}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     masks_done = {p.stem.replace("_cp_masks", "") for p in out_dir.glob("*_cp_masks.png")}
