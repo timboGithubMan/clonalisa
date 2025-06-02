@@ -5,6 +5,11 @@
 > * Install miniconda or anaconda if you don't already have conda installed  
 > https://www.anaconda.com/download/success
 
+> * Highly recommended for a faster install
+>> ```bash
+>> conda config --set solver libmamba
+>> ```
+
 > * If you’re using Miniconda:
 > Git isn’t bundled. Run this once, then continue:
 >> ```bash
@@ -14,7 +19,7 @@
 ## Step 1 — Setup environment
 
 ```bash
-conda create -y -n clonalisa -c conda-forge python=3.10.12 r-base=4.3 pip
+conda create -y -n clonalisa -c conda-forge python=3.10.12 r-base=4.3 r-ggplot2 r-dplyr r-stringr r-forcats r-tidyr r-tibble r-nlme r-emmeans r-broom.mixed r-gridextra r-codetools
 conda activate clonalisa
 ```
 
