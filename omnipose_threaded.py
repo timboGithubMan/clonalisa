@@ -29,16 +29,48 @@ def _extract_well_info(filename: str):
     return None, None
 
 
-def _collect_image_groups(directory: Path) -> dict[str, list[Path]]:
-    tif_files = [f for f in os.listdir(directory) if f.lower().endswith('.tif') and 'bright' in f.lower()]
+def _collect_image_groups(
+    directory: Path,
+    keyword: str = "bright",
+    z_indices: Sequence[int] | None = None,
+) -> dict[str, list[Path]]:
+    """Return a mapping of output name -> list of image paths.
+
+    Parameters
+    ----------
+    directory : Path
+        Folder containing images.
+    keyword : str
+        Only files containing this substring (case insensitive) are used.
+    z_indices : Sequence[int] | None
+        If given, only the specified Z indices are kept for each group.
+    """
+
+    tif_files = [
+        f
+        for f in os.listdir(directory)
+        if f.lower().endswith(".tif") and keyword.lower() in f.lower()
+    ]
+
     groups: dict[str, list[Path]] = {}
     for file in tif_files:
         well_name, position = _extract_well_info(file)
         if well_name and position:
-            parts = file.split('_')
-            step = parts[-1].split('.')[0]
+            parts = file.split("_")
+            step = parts[-1].split(".")[0]
             output_name = f"{well_name}_{position}_merged_{step}"
             groups.setdefault(output_name, []).append(directory / file)
+
+    for name, paths in list(groups.items()):
+        # sort by Z index if present
+        paths.sort(
+            key=lambda p: int(re.search(r"Z(\d+)", p.stem).group(1))
+            if re.search(r"Z(\d+)", p.stem)
+            else 0
+        )
+        if z_indices is not None:
+            groups[name] = [p for idx, p in enumerate(paths) if idx in z_indices]
+
     return groups
 
 
@@ -145,6 +177,8 @@ def run_omnipose(
     model_info: tuple[str, float, float],
     *,
     channel_order: Sequence[int] | None = None,
+    filter_keyword: str = "bright",
+    z_indices: Sequence[int] | None = None,
     save_cellProb: bool = False,
     save_flows: bool = False,
     save_outlines: bool = True,
@@ -157,6 +191,8 @@ def run_omnipose(
     ----------
     directory        : folder with input images
     model_info       : (weights_filename, flow_thresh, mask_thresh)
+    filter_keyword   : filter images containing this substring
+    z_indices        : which Z indices to use (None = all)
     save_cellprob    : save cellprob image
     save_flows       : save flows image
     save_outlines    : save outline image
@@ -174,7 +210,7 @@ def run_omnipose(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     masks_done = {p.stem.replace("_cp_masks", "") for p in out_dir.glob("*_cp_masks.png")}
-    groups_dict = _collect_image_groups(directory)
+    groups_dict = _collect_image_groups(directory, keyword=filter_keyword, z_indices=z_indices)
     all_groups = [(name, paths) for name, paths in groups_dict.items() if name not in masks_done]
 
     if not all_groups:
