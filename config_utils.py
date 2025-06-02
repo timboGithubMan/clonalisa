@@ -8,9 +8,7 @@ CONFIG_PATH = Path(__file__).resolve().parent / 'clonalisa_config.json'
 
 DEFAULT_CONFIG = {
     "regex": {
-        # Example filename: B2_pos1Z0_Bright Field_1_001_02.tif
-        "file": r"(?P<well>[A-Za-z]+\d+)_pos(?P<position>\d+)Z(?P<z_index>\d+)_" \
-                r"(?P<channel>[^_]+(?: [^_]+)*)_\d+_\d+_(?P<step>\d+)",
+        "file": r"(?P<well>[A-Za-z]+\d+)_pos(?P<position>\d+)(?:_(?P<channel>[^_]+))?(?:_Z(?P<z_index>\d+))?(?:_s(?P<step>\d+))?",
         "time_from_folder": r".*_(?P<date>\d{8})_(?P<time>\d{6})$",
     },
     "time_source": "folder",
@@ -81,7 +79,7 @@ def get_image_time(image_path, cfg=None):
     source = cfg.get('time_source', 'folder')
     if source == 'date_created':
         try:
-            ts = Path(image_path).stat().st_ctime
+            ts = Path(image_path).stat().st_birthtime
             return datetime.fromtimestamp(ts)
         except Exception:
             return None

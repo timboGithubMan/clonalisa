@@ -20,7 +20,7 @@ from datetime import datetime
 from itertools import product, combinations
 import glob
 from plotting import create_heatmaps
-from config_utils import load_config, parse_filename, extract_time_from_folder as cfg_extract_time_from_folder, get_image_time
+from config_utils import load_config, parse_filename, extract_time_from_folder, get_image_time
 from pathlib import Path
 
 
@@ -132,9 +132,6 @@ def row_to_index(row_letter):
 
 def extract_column_number(column_label):
     return int(''.join(filter(str.isdigit, column_label)))
-
-def extract_time_from_folder(folder_name):
-    return cfg_extract_time_from_folder(folder_name)
 
 def find_previous_timepoint_csv(current_csv_file):
     """
@@ -639,9 +636,9 @@ def make_all_data_csv(input_folder, model_name=None):
     cfg = load_config()
     all_data = []
 
-    for subdir in glob.glob(os.path.join(input_folder, '*/')):
+    for subdir in glob.glob(os.path.join(input_folder, '*', '*/')):
         try:
-            folder_time = extract_time_from_folder(os.path.basename(subdir.rstrip('/')), cfg)
+            folder_time = extract_time_from_folder(Path(subdir).name, cfg)
 
             for root, _, files in os.walk(subdir):
                 for file in files:
@@ -671,11 +668,9 @@ def make_all_data_csv(input_folder, model_name=None):
     combined_data['Time'] = pd.to_datetime(combined_data['Time'])
     combined_data.sort_values(['Well', 'Time'], inplace=True)
     combined_data['Relative Time (hrs)'] = (
-        combined_data.groupby('Well')['Time']
-        .diff()
-        .dt.total_seconds()
-        .div(3600)
-    )
+        combined_data['Time']
+        - combined_data.groupby('Well')['Time'].transform('min')
+    ).dt.total_seconds() / 3600
     combined_data['Relative Time (hrs)'] = combined_data['Relative Time (hrs)'].fillna(0).astype(float)
     combined_data.drop(columns='Time', inplace=True)
 
