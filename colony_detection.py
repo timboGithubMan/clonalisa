@@ -693,31 +693,31 @@ def count_and_classify_colonies(mask_files, brightfield_files, colony_output_fol
                 border_color = (255, 0, 0)
             cv2.rectangle(colony_color_image, (0, 0), (width-1, height-1), border_color, thickness=border_thickness)
             
-            # if not colony_path.exists() or PROCESS_EXISTING:
-            #     tifffile.imwrite(str(colony_path), colony_color_image)
-            #     logging.info(f"Saved colony image for well {well_coord} to {colony_path}")
-            # else:
-            #     logging.info(f"Colony image for well {well_coord} already exists. Skipping writing.")
+            if not colony_path.exists() or PROCESS_EXISTING:
+                tifffile.imwrite(str(colony_path), colony_color_image)
+                logging.info(f"Saved colony image for well {well_coord} to {colony_path}")
+            else:
+                logging.info(f"Colony image for well {well_coord} already exists. Skipping writing.")
 
-            # try:
-            #     bf_mosaic = image_processing.merge_well_brightfield(brightfield_files)
-            # except Exception as e:
-            #     logging.error(f"Error merging brightfield tiles for well {well_coord}: {e}")
-            #     sample_tile = image_processing.read_brightfield_tile(brightfield_files[0])
-            #     tile_height, tile_width = sample_tile.shape
-            #     full_height = tile_height + 3 * (tile_height - 0)
-            #     full_width = tile_width + 3 * (tile_width - 0)
-            #     bf_mosaic = image_processing.create_placeholder_image(full_height, full_width, 3, border_thickness=8, dtype=sample_tile.dtype)
+            try:
+                bf_mosaic = image_processing.merge_well_brightfield(brightfield_files)
+            except Exception as e:
+                logging.error(f"Error merging brightfield tiles for well {well_coord}: {e}")
+                sample_tile = image_processing.read_brightfield_tile(brightfield_files[0])
+                tile_height, tile_width = sample_tile.shape
+                full_height = tile_height + 3 * (tile_height - 0)
+                full_width = tile_width + 3 * (tile_width - 0)
+                bf_mosaic = image_processing.create_placeholder_image(full_height, full_width, 3, border_thickness=8, dtype=sample_tile.dtype)
             
-            # blend_alpha = 0.8
-            # blend_beta = 0.15
-            # blend_gamma = 0
-            # shaded_img = bf_mosaic.copy()
-            # cell_pixels = colony_map > 0
-            # blended_cells = (bf_mosaic[cell_pixels].astype(np.float32) * blend_alpha +
-            #                 colony_color_image[cell_pixels].astype(np.float32) * blend_beta +
-            #                 blend_gamma).astype(np.uint8)
-            # shaded_img[cell_pixels] = blended_cells
+            blend_alpha = 0.8
+            blend_beta = 0.15
+            blend_gamma = 0
+            shaded_img = bf_mosaic.copy()
+            cell_pixels = colony_map > 0
+            blended_cells = (bf_mosaic[cell_pixels].astype(np.float32) * blend_alpha +
+                            colony_color_image[cell_pixels].astype(np.float32) * blend_beta +
+                            blend_gamma).astype(np.uint8)
+            shaded_img[cell_pixels] = blended_cells
 
             # If dead mask files are provided, merge them and compute their region properties.
             if dead_mask_files is not None:
@@ -852,29 +852,33 @@ def count_and_classify_colonies(mask_files, brightfield_files, colony_output_fol
                             "dead_area_in_proximity": dead_area_in_proximity,
                             "dead_live_ratio_area": dead_area_in_hull / hull_area if hull_area > 0 else 0,
                             "dead_live_ratio_area_proximity": dead_area_in_proximity / hull_area if hull_area > 0 else 0,
-
-                            # ---------------- well‑level ----------------
-                            "num_dead_well_total": len(dead_regions),
-                            "num_live_well_total": len(regions),
-                            "dead_live_ratio_well": len(dead_regions) / len(regions) if len(regions) > 0 else 0,
                         }
                     )
+                    if dead_mask_files is not None:
+                        metrics_list.append(
+                            {
+                                # ---------------- well‑level ----------------
+                                "num_dead_well_total": len(dead_regions),
+                                "num_live_well_total": len(regions),
+                                "dead_live_ratio_well": len(dead_regions) / len(regions) if len(regions) > 0 else 0,
+                            }
+                        )
 
-            # # If dead mask files are provided, outline each dead cell in red on the shaded image.
-            # if dead_mask_files is not None:
-            #     # Convert merged dead mask to uint8 if necessary.
-            #     dead_mask_uint8 = (merged_dead_mask > 0).astype(np.uint8) * 255
-            #     contours, _ = cv2.findContours(dead_mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            #     for cnt in contours:
-            #         cv2.drawContours(shaded_img, [cnt], -1, (255, 0, 0), thickness=1)
+            # If dead mask files are provided, outline each dead cell in red on the shaded image.
+            if dead_mask_files is not None:
+                # Convert merged dead mask to uint8 if necessary.
+                dead_mask_uint8 = (merged_dead_mask > 0).astype(np.uint8) * 255
+                contours, _ = cv2.findContours(dead_mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for cnt in contours:
+                    cv2.drawContours(shaded_img, [cnt], -1, (255, 0, 0), thickness=1)
 
-            # cv2.rectangle(shaded_img, (0, 0), (width-1, height-1), border_color, thickness=border_thickness)
+            cv2.rectangle(shaded_img, (0, 0), (width-1, height-1), border_color, thickness=border_thickness)
 
-            # if not outlined_path.exists() or PROCESS_EXISTING:
-            #     tifffile.imwrite(str(outlined_path), shaded_img)
-            #     logging.info(f"Saved outlined image for well {well_coord} to {outlined_path}")
-            # else:
-            #     logging.info(f"Outlined image for well {well_coord} already exists. Skipping writing.")
+            if not outlined_path.exists() or PROCESS_EXISTING:
+                tifffile.imwrite(str(outlined_path), shaded_img)
+                logging.info(f"Saved outlined image for well {well_coord} to {outlined_path}")
+            else:
+                logging.info(f"Outlined image for well {well_coord} already exists. Skipping writing.")
 
 def merge_plate_and_masks(
         masksDir, dead_masks_dir=None, prev_global_assignments_per_well=None):
@@ -1044,16 +1048,17 @@ def process_plate_datasets(datasets, model):
 # -------------------------------------------------------------------
 # NEW MAIN: Automatically find datasets and group by plate.
 def main():
-    datasets = [d for d in Path(r"E:\MERGED_sspsygene_growthassay_colonies").iterdir() if d.is_dir() and (d / "model_outputs").exists() and ("day1" in d.name) and "blank" not in d.name]
-    for dataset in datasets:
-        merge_plate_and_masks(str(dataset)+r"/model_outputs/2025_03_03_23_34_16.794792_epoch_899_0.4_2", str(dataset)+r"/model_outputs/2025_03_07_02_10_15.252341_epoch_3999_0.4_1")
+    # datasets = [d for d in Path(r"E:\MERGED_sspsygene_growthassay_colonies").iterdir() if d.is_dir() and (d / "model_outputs").exists() and ("day1" in d.name) and "blank" not in d.name]
+    # for dataset in datasets:
+    #     merge_plate_and_masks(str(dataset)+r"/model_outputs/2025_03_03_23_34_16.794792_epoch_899_0.4_2", str(dataset)+r"/model_outputs/2025_03_07_02_10_15.252341_epoch_3999_0.4_1")
 
-    # merge_plate_and_masks(r"E:\MERGED_sspsygene_growthassay_colonies\cluster_optimize_set\model_outputs\optimize")
+    merge_plate_and_masks(r"E:\MERGED_sspsygene_growthassay_colonies\cluster_optimize_set\model_outputs\optimize")
 
     # ground_truth_csv = r"E:\MERGED_sspsygene_growthassay_colonies\ground_truth.csv"
     # # # Set the base input folder and the model name.
-    base_input = r"E:\MERGED_sspsygene_growthassay_colonies"
-    model = "2025_03_03_23_34_16.794792_epoch_899_0.4_2"
+
+    # base_input = r"E:\MERGED_sspsygene_growthassay_colonies"
+    # model = "2025_03_03_23_34_16.794792_epoch_899_0.4_2"
 
     # # Find subdirectories that contain a "model_outputs" folder.
     # datasets = [d for d in Path(base_input).iterdir() if d.is_dir() and (d / "model_outputs").exists() and ("day1" in d.name or "day4" in d.name)]
