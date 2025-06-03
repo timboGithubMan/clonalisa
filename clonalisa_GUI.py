@@ -9,10 +9,14 @@ import process_masks
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QTextEdit, QComboBox,
-    QDialog, QFormLayout, QDialogButtonBox, QRadioButton, QButtonGroup
+    QDialog, QFormLayout, QDialogButtonBox, QRadioButton, QButtonGroup,
+    QTableWidget, QTableWidgetItem, QInputDialog
 )
+from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt
 
-from config_utils import load_config, save_config
+from config_utils import load_config, save_config, parse_filename
+import pandas as pd
 
 # Constants similar to simple_omnipose_gui
 MAX_WORKERS = os.cpu_count() // 2
@@ -49,12 +53,6 @@ class ConfigDialog(QDialog):
         layout.addRow("Filename regex", self.regex_file)
         layout.addRow("Time regex", self.regex_time)
 
-        self.time_combo = QComboBox()
-        self.time_combo.addItem("folder")
-        self.time_combo.addItem("date_created")
-        current = 1 if self.cfg.get('time_source', 'folder') == 'date_created' else 0
-        self.time_combo.setCurrentIndex(current)
-        layout.addRow("Time source", self.time_combo)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
@@ -66,7 +64,6 @@ class ConfigDialog(QDialog):
             'file': self.regex_file.text(),
             'time_from_folder': self.regex_time.text(),
         }
-        self.cfg['time_source'] = self.time_combo.currentText()
         save_config(self.cfg)
 
 
@@ -76,6 +73,8 @@ class clonalisaGUI(QWidget):
         self.setWindowTitle("ClonaLiSA")
         self.resize(600, 400)
         self.cfg = load_config()
+        self.plate_wells: dict[str, set[str]] = {}
+        self.group_data: dict[str, dict[str, dict[str, str]]] = {}
         self._setup_ui()
         self._model_selected(0)
 
@@ -92,6 +91,41 @@ class clonalisaGUI(QWidget):
         inp_layout.addWidget(self.inp_edit)
         inp_layout.addWidget(browse_inp)
         layout.addLayout(inp_layout)
+
+        plate_layout = QHBoxLayout()
+        plate_layout.addWidget(QLabel("Plate:"))
+        self.plate_combo = QComboBox()
+        self.plate_combo.currentIndexChanged.connect(self._plate_selected)
+        plate_layout.addWidget(self.plate_combo)
+        self.view_combo = QComboBox()
+        self.view_combo.addItem("Imaged Wells")
+        self.view_combo.currentIndexChanged.connect(self._update_grid)
+        plate_layout.addWidget(self.view_combo)
+        layout.addLayout(plate_layout)
+
+        self.table = QTableWidget(8, 12)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setHorizontalHeaderLabels([str(i+1) for i in range(12)])
+        self.table.setVerticalHeaderLabels([chr(ord('A')+i) for i in range(8)])
+        layout.addWidget(self.table)
+
+        group_layout = QHBoxLayout()
+        self.group_combo = QComboBox()
+        group_layout.addWidget(self.group_combo)
+        new_group = QPushButton("New Group")
+        new_group.clicked.connect(self._new_group)
+        group_layout.addWidget(new_group)
+        self.value_edit = QLineEdit()
+        self.value_edit.setPlaceholderText("Value")
+        group_layout.addWidget(self.value_edit)
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(self._apply_group)
+        group_layout.addWidget(apply_btn)
+        save_btn = QPushButton("Save Groups")
+        save_btn.clicked.connect(self._save_group_map)
+        group_layout.addWidget(save_btn)
+        layout.addLayout(group_layout)
 
         # Model selection
         mod_layout = QHBoxLayout()
@@ -176,6 +210,7 @@ class clonalisaGUI(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Select folder")
         if path:
             self.inp_edit.setText(path)
+            self._load_plates(path)
 
     def _browse_model(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select model", "omnipose_models")
@@ -213,6 +248,115 @@ class clonalisaGUI(QWidget):
         self.model_combo.blockSignals(False)
         if current:
             self.model_combo.setCurrentText(current)
+
+    # ----- plate/group helpers -----
+    def _load_plates(self, folder: str) -> None:
+        self.plate_combo.clear()
+        self.view_combo.clear()
+        self.view_combo.addItem("Imaged Wells")
+        self.table.clearContents()
+        self.plate_wells.clear()
+        self.group_data.clear()
+        plates = set()
+        for sub in os.listdir(folder):
+            if os.path.isdir(os.path.join(folder, sub)):
+                plates.add(sub.split('_')[0])
+        for p in sorted(plates):
+            self.plate_combo.addItem(p)
+
+    def _plate_selected(self, idx: int) -> None:
+        if idx < 0:
+            return
+        plate = self.plate_combo.currentText()
+        if not plate:
+            return
+        input_dir = self.inp_edit.text()
+        wells = set()
+        for sub in os.listdir(input_dir):
+            if not sub.startswith(plate):
+                continue
+            for root, _, files in os.walk(os.path.join(input_dir, sub)):
+                for f in files:
+                    if f.lower().endswith('.tif'):
+                        well, _, _, _, _ = parse_filename(f)
+                        if well:
+                            wells.add(well)
+                break
+        self.plate_wells[plate] = wells
+        self._update_grid()
+
+    def _index_to_well(self, row: int, col: int) -> str:
+        return f"{chr(ord('A')+row)}{col+1}"
+
+    def _update_grid(self) -> None:
+        plate = self.plate_combo.currentText()
+        if not plate:
+            return
+        view = self.view_combo.currentText()
+        wells = self.plate_wells.get(plate, set())
+        for r in range(8):
+            for c in range(12):
+                item = self.table.item(r, c)
+                if item is None:
+                    item = QTableWidgetItem()
+                    self.table.setItem(r, c, item)
+                well = self._index_to_well(r, c)
+                item.setText("")
+                if view == "Imaged Wells":
+                    color = QColor("lightgreen") if well in wells else QColor("lightgray")
+                    item.setBackground(color)
+                else:
+                    mapping = self.group_data.get(plate, {}).get(view, {})
+                    val = mapping.get(well)
+                    if val is not None:
+                        item.setBackground(QColor("lightblue"))
+                        item.setText(str(val))
+                    else:
+                        item.setBackground(QColor("white"))
+
+    def _new_group(self) -> None:
+        name, ok = QInputDialog.getText(self, "New Group", "Group name:")
+        if ok and name:
+            if self.group_combo.findText(name) == -1:
+                self.group_combo.addItem(name)
+                self.view_combo.addItem(name)
+
+    def _apply_group(self) -> None:
+        plate = self.plate_combo.currentText()
+        group = self.group_combo.currentText()
+        value = self.value_edit.text()
+        if not plate or not group or not value:
+            return
+        sel = self.table.selectedIndexes()
+        if not sel:
+            return
+        mapping = self.group_data.setdefault(plate, {}).setdefault(group, {})
+        for idx in sel:
+            well = self._index_to_well(idx.row(), idx.column())
+            mapping[well] = value
+        self.value_edit.clear()
+        self._update_grid()
+
+    def _save_group_map(self) -> None:
+        folder = self.inp_edit.text()
+        if not folder:
+            return
+        rows = []
+        for plate, groups in self.group_data.items():
+            wells = set()
+            for g in groups.values():
+                wells.update(g.keys())
+            for well in wells:
+                row = {"Plate": plate.replace("plate", ""), "Well": well}
+                for gname, mapping in groups.items():
+                    row[gname] = mapping.get(well)
+                rows.append(row)
+        if rows:
+            df = pd.DataFrame(rows)
+            df.to_csv(os.path.join(folder, "group_map.csv"), index=False)
+            self._append_log("Saved group_map.csv")
+        else:
+            self._append_log("No groups to save")
 
     def _open_config(self) -> None:
         dlg = ConfigDialog(self)

@@ -11,7 +11,6 @@ DEFAULT_CONFIG = {
         "file": r"(?P<well>[A-Za-z]+\d+)_pos(?P<position>\d+)(?:_(?P<channel>[^_]+))?(?:_Z(?P<z_index>\d+))?(?:_s(?P<step>\d+))?",
         "time_from_folder": r".*_(?P<date>\d{8})_(?P<time>\d{6})$",
     },
-    "time_source": "folder",
     "model_history": [
         {
             "path": str(Path('omnipose_models/10x_NPC_nclasses_2_nchan_3_dim_2_2024_03_29_02_03_10.875324_epoch_960')),
@@ -74,14 +73,7 @@ def extract_time_from_folder(folder_name, cfg=None):
 
 
 def get_image_time(image_path, cfg=None):
+    """Return the timestamp encoded in *image_path*'s parent folder."""
     if cfg is None:
         cfg = load_config()
-    source = cfg.get('time_source', 'folder')
-    if source == 'date_created':
-        try:
-            ts = Path(image_path).stat().st_birthtime
-            return datetime.fromtimestamp(ts)
-        except Exception:
-            return None
-    # fallback to folder name
     return extract_time_from_folder(Path(image_path).parent.name, cfg)

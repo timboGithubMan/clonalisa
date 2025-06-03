@@ -647,14 +647,9 @@ def make_all_data_csv(input_folder, model_name=None):
                         times = []
                         for mask_fp in data['file_path']:
                             src_img = find_source_image(mask_fp)
-                            if cfg.get('time_source', 'folder') == 'date_created':
-                                t = get_image_time(src_img, cfg) if src_img else None
-                                if t is None:
-                                    t = folder_time
-                            else:
-                                t = folder_time
-                                if t is None and src_img:
-                                    t = get_image_time(src_img, cfg)
+                            t = folder_time
+                            if t is None and src_img:
+                                t = get_image_time(src_img, cfg)
                             times.append(t)
                         data['Time'] = times
                         all_data.append(data)
