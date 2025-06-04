@@ -500,11 +500,15 @@ class ClonaLiSAGUI(QWidget):
             csv_path = Path(folder) / "group_map.csv"
             pd.DataFrame(rows).to_csv(csv_path, index=False)
             self._append_log("Saved group_map.csv")
-            model = Path(self.model_combo.currentText())
-            if model.is_file():
-                all_csv = process_masks.make_all_data_csv(folder, model.name)
-                if all_csv:
-                    self.csv_edit.setText(all_csv)
+
+            csv = Path(self.csv_edit.text())
+            if csv.is_file():
+                updated = process_masks.update_groups_in_all_csv(csv, csv_path)
+                if updated:
+                    self.csv_edit.setText(updated)
+                    self._append_log("Updated all_data CSV with groups")
+            else:
+                self._append_log("all_data CSV not found; run pipeline first")
         else:
             self._append_log("No groups to save")
 

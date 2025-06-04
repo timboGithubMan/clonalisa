@@ -709,6 +709,36 @@ def make_all_data_csv(input_folder, model_name=None):
     combined_data.to_csv(combined_data_path, index=False)
     return combined_data_path
 
+
+def update_groups_in_all_csv(all_csv_path: str | Path, group_map_path: str | Path) -> str | None:
+    """Update or append group columns in an existing all_data CSV."""
+    all_csv = Path(all_csv_path)
+    group_csv = Path(group_map_path)
+    if not (all_csv.is_file() and group_csv.is_file()):
+        return None
+
+    try:
+        df = pd.read_csv(all_csv)
+        group_df = pd.read_csv(group_csv).astype(str)
+        group_df = group_df.replace({"NA": np.nan, "nan": np.nan}).dropna()
+        group_df.columns = (
+            list(group_df.columns[:2])
+            + ["Group-" + c for c in group_df.columns[2:]]
+        )
+        group_df["Plate"] = group_df["Plate"].str.lower()
+        group_df["PlateWell"] = group_df["Plate"] + group_df["Well"].astype(str)
+
+        df["Plate"] = df["Plate"].astype(str).str.lower()
+        df["PlateWell"] = df["Plate"] + df["Well"].astype(str)
+
+        df.drop(columns=[c for c in df.columns if c.startswith("Group-")], inplace=True, errors="ignore")
+        df = df.merge(group_df.drop(columns=["Plate", "Well"]), on="PlateWell", how="left", suffixes=("", "_drop"))
+        df = df.loc[:, ~df.columns.str.endswith("_drop")]
+        df.to_csv(all_csv, index=False)
+        return str(all_csv)
+    except Exception:
+        return None
+
 if __name__ == "__main__":
     outline_cells_directory(r"E:\test\test_day5_20250519_153429", r"E:\test\test_day5_20250519_153429\model_outputs\2024_03_29_02_03_10.875324_epoch_960_0.4_0", channel=1)
     # outline_cells_directory(image_dir, masks_dir, channel=2)
