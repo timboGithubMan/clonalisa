@@ -45,6 +45,19 @@ if (length(to_get))
 invisible(lapply(needed, library, character.only = TRUE))
 
 ## ─────────────────────────────────────────────────────────────────────────────
+## 1·a)  Helper – alphanumeric levels (letters before numbers)
+## ─────────────────────────────────────────────────────────────────────────────
+alpha_levels <- function(x) {
+  lv <- unique(as.character(x))
+  letters <- lv[stringr::str_detect(lv, "^[A-Za-z]")]
+  digits  <- lv[stringr::str_detect(lv, "^[0-9]")]
+  others  <- setdiff(lv, c(letters, digits))
+  c(stringr::str_sort(letters, numeric = TRUE),
+    stringr::str_sort(digits,  numeric = TRUE),
+    others)
+}
+
+## ─────────────────────────────────────────────────────────────────────────────
 ## 2)  Read CSV  ▸ strip Group.* prefixes
 ## ─────────────────────────────────────────────────────────────────────────────
 data <- read.csv(input_csv, check.names = FALSE)
@@ -68,12 +81,14 @@ for (nm in c(fe1_name, fe2_name)) {
 data <- data %>%
   mutate(
     well     = PlateWell,
-    fe1      = factor(.data[[fe1_name]]),
+    fe1      = factor(.data[[fe1_name]], levels = alpha_levels(.data[[fe1_name]])),
     subgroup = well
   )
 
 if (fe2_name != "") {
-  data <- data %>% mutate(fe2 = factor(.data[[fe2_name]]))
+  data <- data %>%
+  mutate(fe2 = factor(.data[[fe2_name]],
+                       levels = alpha_levels(.data[[fe2_name]])))
   if (ref_level != "" && ref_level %in% levels(data$fe2))
       data$fe2 <- relevel(data$fe2, ref = ref_level)
 } else {
@@ -282,7 +297,7 @@ if (fe2_name != "" && ref_level != "") {
     left_join(cts_df %>% select(fe1, fe2, signif_label),
               by = c("fe1", "fe2")) %>%
     mutate(signif_label = dplyr::coalesce(signif_label, "")) %>%
-    group_by(fe1) %>% mutate(fe2 = forcats::fct_reorder(fe2, pct_diff)) %>% ungroup()
+    ungroup()
 
   plot_pct <- ggplot(emm_df_pct,
                      aes(fe2, pct_diff, fill = fe1)) +
@@ -364,7 +379,8 @@ if (fe2_name != "" && ref_level != "") {
               vjust = -0.4, size = 6, colour = "black") +
     theme_classic(base_size = 12) +
     labs(title = paste(fe2_name, "effect across", fe1_name),
-         x = fe2_name, y = "Percent growth per day") +
+         x = fe2_name, y = "Percent growth per day",
+		 colour = fe1_name) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
   print(interaction_plot)
   ggsave(file.path(output_dir, "interaction_plot.pdf"),

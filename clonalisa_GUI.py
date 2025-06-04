@@ -507,6 +507,8 @@ class ClonaLiSAGUI(QWidget):
                 if updated:
                     self.csv_edit.setText(updated)
                     self._append_log("Updated all_data CSV with groups")
+                    self._update_fixed_effect_options()
+                    self._update_ref_levels()
             else:
                 self._append_log("all_data CSV not found; run pipeline first")
         else:
