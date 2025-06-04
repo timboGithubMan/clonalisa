@@ -298,8 +298,22 @@ class ClonaLiSAGUI(QWidget):
         self.model_combo.blockSignals(False)
         self.model_combo.setCurrentText(current)
 
-    # -- plate / well grid -----------------------------------------------------
+    # ------------------------------------------------------------------
+    # Plate / well grid -------------------------------------------------
+    # ------------------------------------------------------------------
     def _load_plates(self, folder: str):
+        """
+        Populate plate list, view list, well sets, and group mappings.
+
+        * Plates are discovered in two ways:
+            1. Sub-folders in the chosen input directory.
+            2. The Plate column in group_map.csv (if it exists).
+        """
+        # Avoid cascade of currentIndexChanged slots while we rebuild
+        self.plate_combo.blockSignals(True)
+        self.view_combo.blockSignals(True)
+
+        # ---------- full reset ---------------------------------------
         self.plate_combo.clear()
         self.view_combo.clear()
         self.view_combo.addItem("Imaged Wells")
@@ -307,10 +321,58 @@ class ClonaLiSAGUI(QWidget):
         self.plate_wells.clear()
         self.group_data.clear()
 
-        plates = {sub.split('_')[0] for sub in os.listdir(folder)
-                  if os.path.isdir(os.path.join(folder, sub))}
-        self.plate_combo.addItems(sorted(plates))
+        # ---------- 1) discover plates from sub-folders --------------
+        discovered_plates = {
+            sub.split('_')[0]
+            for sub in os.listdir(folder)
+            if os.path.isdir(os.path.join(folder, sub))
+        }
+
+        # ---------- 2) optionally load group_map.csv ----------------
+        csv_path = Path(folder) / "group_map.csv"
+        if csv_path.is_file():
+            df = pd.read_csv(csv_path).fillna("")
+            df.columns = [c.strip() for c in df.columns]
+
+            for _, row in df.iterrows():
+                plate = str(row["Plate"]).strip()     # <- NO NORMALISATION
+                well  = row["Well"].strip()
+
+                # ensure plate shows up in GUI even if not on disk
+                self.plate_wells.setdefault(plate, set()).add(well)
+
+                for group_name, val in row.items():
+                    if group_name in ("Plate", "Well") or val == "":
+                        continue
+
+                    (
+                        self.group_data
+                        .setdefault(plate, {})
+                        .setdefault(group_name, {})
+                    )[well] = str(val)
+
+                    if self.view_combo.findText(group_name) == -1:
+                        self.view_combo.addItem(group_name)
+
+        # ---------- 3) merge folder-found plates --------------------
+        for plate in sorted(discovered_plates):
+            if plate not in self.plate_wells:
+                self.plate_wells[plate] = set()        # wells will fill later
+
+        # ---------- 4) populate plate_combo -------------------------
+        for plate in sorted(self.plate_wells.keys()):
+            self.plate_combo.addItem(plate)
+
+        # ---------- 5) wrap-up --------------------------------------
+        self.plate_combo.blockSignals(False)
+        self.view_combo.blockSignals(False)
+
+        # update fixed-effect drop-downs and show first plate
         self._update_fixed_effect_options()
+        if self.plate_combo.count() > 0:
+            self.plate_combo.setCurrentIndex(0)   # triggers _plate_selected
+            self._plate_selected(None)
+
 
     def _plate_selected(self, _):
         plate = self.plate_combo.currentText()

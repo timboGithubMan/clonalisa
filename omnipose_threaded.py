@@ -180,7 +180,7 @@ def run_omnipose(
     save_cellProb: bool = False,
     save_flows: bool = False,
     save_outlines: bool = True,
-    num_threads: int = 4,
+    num_threads: None,
     progress_callback=None,
 ) -> Path:
     """
@@ -202,6 +202,9 @@ def run_omnipose(
     -------
     Path to the folder holding Omnipose outputs.
     """
+
+    num_threads = os.cpu_count() // 2 if num_threads <= 0 else num_threads
+
     directory = Path(directory).expanduser().resolve()
     if not directory.is_dir():
         raise NotADirectoryError(directory)

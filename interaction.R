@@ -1,749 +1,445 @@
-needed <- c("ggplot2","dplyr","stringr","forcats","tidyr",
-            "tibble","nlme","emmeans","broom.mixed","gridExtra", "codetools")
+#!/usr/bin/env Rscript
+###############################################################################
+##  Generic logistic-growth analysis – full script with corrected ggsave()
+##
+##  USAGE
+##    Rscript growth_generic.R  <input_csv>  <fe1>  [fe2]  [interaction_flag]  [ref_level]
+##
+##      input_csv         : full path to *.csv
+##      fe1               : column name for the first fixed-effect factor
+##      fe2   (optional)  : column name for the second fixed-effect factor
+##      interaction_flag  : 1 / 0  → include the fe1*fe2 interaction (default 0)
+##      ref_level         : reference level inside fe2 (e.g. “DMSO”)
+###############################################################################
+
+## ─────────────────────────────────────────────────────────────────────────────
+## 0)  Parse command-line arguments
+## ─────────────────────────────────────────────────────────────────────────────
+args <- commandArgs(trailingOnly = TRUE)
+stopifnot(length(args) >= 1)
+
+input_csv        <- args[1]
+fe1_name         <- if (length(args) >= 2) args[2] else
+                      stop("Supply a column name for fe1.")
+fe2_name         <- if (length(args) >= 3) args[3] else ""
+interaction_flag <- if (length(args) >= 4) as.logical(as.integer(args[4])) else FALSE
+ref_level        <- if (length(args) >= 5) args[5] else ""
+
+cat("\n###  ARGUMENT SUMMARY  ##############################################\n",
+    "CSV file          : ", input_csv, "\n",
+    "Fixed effect 1    : ", fe1_name,  "\n",
+    "Fixed effect 2    : ", ifelse(fe2_name == "", "(none)", fe2_name), "\n",
+    "Interaction flag  : ", interaction_flag, "\n",
+    "Reference level   : ", ifelse(ref_level == "", "(none)", ref_level), "\n",
+    "#######################################################################\n\n")
+
+## ─────────────────────────────────────────────────────────────────────────────
+## 1)  Load / install required packages
+## ─────────────────────────────────────────────────────────────────────────────
+needed <- c("ggplot2","dplyr","stringr","forcats","tidyr","tibble","nlme",
+            "emmeans","broom.mixed","gridExtra","codetools","scales")
 
 to_get <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
 if (length(to_get))
     install.packages(to_get, repos = "https://cloud.r-project.org")
-	
-library(emmeans)
-library(dplyr)
-library(stringr)
-library(forcats)
-library(ggplot2)
-library(nlme)
-library(broom.mixed)
-library(tibble)
-library(gridExtra)
-library(tidyr)
+invisible(lapply(needed, library, character.only = TRUE))
 
-args <- commandArgs(trailingOnly=TRUE)
-input_csv <- args[1]
-fe1 <- if (length(args) >= 2) args[2] else ""
-fe2 <- if (length(args) >= 3) args[3] else ""
-interaction_flag <- if (length(args) >= 4) as.logical(as.integer(args[4])) else FALSE
-ref_level <- if (length(args) >= 5) args[5] else ""
+## ─────────────────────────────────────────────────────────────────────────────
+## 2)  Read CSV  ▸ strip Group.* prefixes
+## ─────────────────────────────────────────────────────────────────────────────
+data <- read.csv(input_csv, check.names = FALSE)
+names(data) <- sub("^Group[.-]", "", names(data))
 
-raw <- read.csv(input_csv)
-if (fe1 != "") {
-  col1 <- make.names(paste0("Group-", fe1))
-  if (! col1 %in% names(raw)) raw[[col1]] <- NA_character_
-  raw$fe1_val <- factor(raw[[col1]])
+cat("Columns in the CSV:\n"); print(colnames(data)); cat("\n")
+
+required_base <- c("PlateWell", "Relative Time (hrs)", "cell_density")
+missing_base  <- setdiff(required_base, colnames(data))
+if (length(missing_base))
+    stop("Missing required columns: ", paste(missing_base, collapse = ", "))
+
+for (nm in c(fe1_name, fe2_name)) {
+  if (nzchar(nm) && !nm %in% colnames(data))
+      stop("Column \"", nm, "\" not found.")
+}
+
+## ─────────────────────────────────────────────────────────────────────────────
+## 3)  Canonical columns & factors
+## ─────────────────────────────────────────────────────────────────────────────
+data <- data %>%
+  mutate(
+    well     = PlateWell,
+    fe1      = factor(.data[[fe1_name]]),
+    subgroup = well
+  )
+
+if (fe2_name != "") {
+  data <- data %>% mutate(fe2 = factor(.data[[fe2_name]]))
+  if (ref_level != "" && ref_level %in% levels(data$fe2))
+      data$fe2 <- relevel(data$fe2, ref = ref_level)
 } else {
-  raw$fe1_val <- factor("all")
+  data$fe2 <- factor("ALL")
+  interaction_flag <- FALSE
 }
-if (fe2 != "") {
-  col2 <- make.names(paste0("Group-", fe2))
-  if (! col2 %in% names(raw)) raw[[col2]] <- NA_character_
-  raw$fe2_val <- factor(raw[[col2]])
-  if (interaction_flag && ref_level != "")
-    raw$fe2_val <- relevel(raw$fe2_val, ref_level)
-} else {
-  raw$fe2_val <- factor("all")
-}
-if (ref_level == "" && fe2 != "") {
-  ref_level <- levels(raw$fe2_val)[1]
-}
-fe1_label <- if (fe1 != "") fe1 else "FE1"
-fe2_label <- if (fe2 != "") fe2 else "FE2"
-data <- raw %>%
-  mutate(well = PlateWell,
-         subgroup = well) %>%
-  rename(time = "Relative.Time..hrs.",
+
+data <- data %>%
+  rename(time = "Relative Time (hrs)",
          value = cell_density)
-  # filter(time < 80 | time > 100)
-output_dir <- file.path(dirname(input_csv),
-                        sprintf("model_%s_%s", fe2_label, fe1_label),
-                        "logistic_growth")
+
+## ─────────────────────────────────────────────────────────────────────────────
+## 4)  Output directory & PDF sink
+## ─────────────────────────────────────────────────────────────────────────────
+tag <- paste0("logistic_", fe1_name,
+              if (fe2_name != "") paste0("_", fe2_name))
+output_dir <- file.path(dirname(input_csv), "model_outputs", tag)
 if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
-pdf(
-  file      = file.path(output_dir, "growth_summary.pdf"),  # goes in output_dir
-  width     = 11,            # 11 x 8.5 in  ⇒ landscape US-Letter
-  height    = 8.5,
-  onefile   = TRUE,          # keep adding pages
-  paper     = "special"      # let width/height rule (alt: paper = "USr" or "a4r")
-)
-on.exit(dev.off(), add = TRUE)   # closes the device even if the script errors
+pdf(file = file.path(output_dir, "growth_summary.pdf"),
+    width = 11, height = 8.5, onefile = TRUE, paper = "special")
+on.exit(dev.off(), add = TRUE)
 
-data <- data %>% 
-  arrange(subgroup, fe2_val, fe1_val, well, time) %>%          # make “first” reliable
-  group_by(subgroup, fe2_val, fe1_val, well) %>% 
-  mutate(
-    Tref         = first(time),                # earliest absolute time in the well
-    shifted_time = time - Tref
-  ) %>% 
-  # ── PER-WELL AVERAGE AT EACH TIME POINT ──────────────────────────────
-  group_by(subgroup, fe2_val, fe1_val, well, shifted_time, time, Tref) %>% 
-  summarise(
-    value = mean(value, na.rm = TRUE),         # mean per well/time point
-    .groups = "drop"
-  ) %>% 
-  # ── N0 = MEAN AT THE FIRST TIME POINT ────────────────────────────────
-  arrange(subgroup, fe2_val, fe1_val, well, shifted_time, time, Tref) %>%  # ensure first row is earliest
-  group_by(subgroup, fe2_val, fe1_val, well) %>%               
-  mutate(N0 = first(value)) %>%                # first *mean* value in each well
+## ─────────────────────────────────────────────────────────────────────────────
+## 5)  Pre-processing
+## ─────────────────────────────────────────────────────────────────────────────
+data <- data %>%
+  arrange(subgroup, fe2, fe1, well, time) %>%
+  group_by(subgroup, fe2, fe1, well) %>%
+  mutate(Tref = first(time),
+         shifted_time = time - Tref) %>%
+  group_by(subgroup, fe2, fe1, well,
+           shifted_time, time, Tref) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  arrange(subgroup, fe2, fe1, well, shifted_time) %>%
+  group_by(subgroup, fe2, fe1, well) %>%
+  mutate(N0 = first(value)) %>%
   ungroup()
 
-## BASIC QC ####################################################
-# ---------------------------------------------------------------
-# 1. Distribution of all N0 values (histogram + density overlay)
-# ---------------------------------------------------------------
-starting_density_filter_min <- 10000
-starting_density_filter_max <- 200000
+## ── QC plots ────────────────────────────────────────────────────────────────
+N0_min <- 1e4; N0_max <- 2e5
 
-p_dist <- ggplot(data, aes(x = N0)) +
-  geom_histogram(aes(y = after_stat(count)), bins = 50,
-                 fill = "steelblue", colour = "white", alpha = 0.7) +
-  # geom_density(aes(y = ..count..), linewidth = 1) +
-  theme_minimal() +
-  
+p_hist <- ggplot(data, aes(N0)) +
+  geom_histogram(bins = 50, fill = "steelblue", colour = "white", alpha = .7) +
   scale_x_log10() +
-  geom_vline(
-    xintercept = starting_density_filter_min,          # raw‐data value (before log10 transform)
-    colour     = "red",
-    linewidth  = 1,             # thickness (optional)
-    linetype   = "solid"        # or "dashed", "dotdash", etc.
-  ) +
-  geom_vline(
-    xintercept = starting_density_filter_max,          # raw‐data value (before log10 transform)
-    colour     = "red",
-    linewidth  = 1,             # thickness (optional)
-    linetype   = "solid"        # or "dashed", "dotdash", etc.
-  ) +
-  labs(title = "QC filter for starting density (N0) - distribution across all wells",
-       x = "N0",
-       y = "Count")
-
-p_dist          # print first plot to the active device
-ggsave(file.path(output_dir, "qc_N0_distribution_histogram.pdf"),
-       plot = p_dist, width = 8, height = 6)
-
-data_unique_N0 <- data %>%           # 1. keep only shifted_time == 0
-  filter(shifted_time == 0) %>%     
-  mutate(                           # 2. shuffle the colour order for each subgroup
-    subgroup = factor(subgroup,             #    (changes the order that ggplot assigns hues)
-                  levels = sample(unique(subgroup)))
-  )
-
-library(scales)   # make sure this is loaded for label_number()
-
-p_dist_facet <- ggplot(
-  data_unique_N0,
-  aes(x = N0, y = 0, colour = subgroup)
-) +
-  geom_jitter(
-    width  = 0,
-    height = 0.25,
-    alpha  = 1,
-    size   = 3
-  ) +
-  scale_x_log10(
-    minor_breaks = rep(1:9, 20) * 10^rep(-9:10, each = 9),
-    labels = label_number(accuracy = 1),   # <-- plain-number ticks,
-  ) +
-  facet_wrap(~fe2_val, ncol = 1, strip.position = "right") +
-  guides(colour = "none") +
-  labs(
-    title  = "QC filter for starting density (N0) - Facet by fe2_val, Color by subgroup",
-    x      = "Starting Density (N0)",
-    y      = NULL,
-    colour = "subgroup"
-  ) +
-  geom_vline(
-    xintercept = starting_density_filter_min,          # raw‐data value (before log10 transform)
-    colour     = "red",
-    linewidth  = 1,             # thickness (optional)
-    linetype   = "solid"        # or "dashed", "dotdash", etc.
-  ) +
-  geom_vline(
-    xintercept = starting_density_filter_max,          # raw‐data value (before log10 transform)
-    colour     = "red",
-    linewidth  = 1,             # thickness (optional)
-    linetype   = "solid"        # or "dashed", "dotdash", etc.
-  ) +
+  geom_vline(xintercept = c(N0_min, N0_max), colour = "red") +
   theme_minimal() +
-  theme(
-    strip.text.y.right = element_text(angle = 0),
-    strip.placement    = "outside",
-    # black gridlines on the x-axis
-    panel.grid.major.x = element_line(linewidth = 0.5, colour = "darkgray"),
-    panel.grid.minor.x = element_line(linewidth = 0.5, colour = "darkgray"),
-    
-    # keep y-axis grids/ticks/labels off
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor.y = element_blank(),
-    axis.text.y  = element_blank(),
-    axis.ticks.y = element_blank()
-  )
+  labs(title = "Starting density (N0) histogram")
+print(p_hist)
+ggsave(file.path(output_dir, "qc_N0_histogram.pdf"),
+       plot = p_hist, width = 8, height = 6)
 
-p_dist_facet   # draw the plot
-ggsave(file.path(output_dir, "qc_N0_distribution_facet_fe2_val.pdf"),
-       plot = p_dist_facet, width = 8, height = 12)
+data_unique_N0 <- data %>%
+  filter(shifted_time == 0) %>%
+  mutate(subgroup = factor(subgroup, levels = sample(unique(subgroup))))
 
-data <- data %>% filter(N0 > starting_density_filter_min)
-data <- data %>% filter(N0 < starting_density_filter_max)
+p_facet <- ggplot(data_unique_N0,
+                  aes(N0, 0, colour = subgroup)) +
+  geom_jitter(height = 0.25, size = 3) +
+  scale_x_log10(minor_breaks = rep(1:9, 20) * 10^rep(-9:10, each = 9),
+                labels = label_number(accuracy = 1)) +
+  facet_wrap(~fe2, ncol = 1, strip.position = "right") +
+  guides(colour = "none") +
+  geom_vline(xintercept = c(N0_min, N0_max), colour = "red") +
+  theme_minimal() +
+  labs(title = "QC filter for starting density (N0)",
+       x = "N0") +
+  theme(strip.text.y.right = element_text(angle = 0),
+        panel.grid.major.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+print(p_facet)
+ggsave(file.path(output_dir, "qc_N0_facet.pdf"),
+       plot = p_facet, width = 8, height = 12)
 
+data <- data %>% filter(N0 > N0_min, N0 < N0_max)
 
-logistic_growth <- function(time, K, r, N0) {
-  K / (1 + ((K - N0) / N0) * exp(-r * time))
-}
+## ─────────────────────────────────────────────────────────────────────────────
+## 6)  NLME logistic-growth model
+## ─────────────────────────────────────────────────────────────────────────────
+logistic_growth <- function(t, K, r, N0)
+  K / (1 + ((K - N0)/N0)*exp(-r*t))
 
-formula_str <- if (fe1 != "" && fe2 != "") {
-  if (interaction_flag) {
-    "fe1_val * fe2_val"
-  } else {
-    "fe1_val + fe2_val"
-  }
-} else if (fe1 != "") {
-  "fe1_val"
-} else {
-  "fe2_val"
-}
-n_fix <- ncol(model.matrix(as.formula(paste("~", formula_str)), data))
-init_K <- max(data[["value"]], na.rm = TRUE) * 1.1
-init_r <- 0.05
+rhs <- if (interaction_flag) "fe1*fe2" else
+         paste(c("fe1", if (fe2_name != "") "fe2"), collapse = " + ")
+design_formula <- as.formula(paste("~", rhs))
+r_formula      <- as.formula(paste("r ~", rhs))
 
+init_K  <- max(data$value, na.rm = TRUE) * 1.1
+init_r  <- 0.05
+n_fix   <- ncol(model.matrix(design_formula, data))
 start_vals <- c(K = init_K, r = rep(init_r, n_fix))
-full_fit <- try(
-  nlme(
-    value ~ logistic_growth(shifted_time, K, r, N0),
-    data    = data,
-    fixed   = list(K ~ 1, r ~ as.formula(paste("~", formula_str))),
-    random  = list(subgroup = pdDiag(r ~ 1)),
-    start   = start_vals,
-    na.action = na.omit,
-    control = nlmeControl(
-      maxIter   = 1e3,
-      msMaxIter = 1e3,
-      msVerbose = TRUE
-    ),
-  ),
-  silent = TRUE          
-)
 
-if (inherits(full_fit, "try-error")) {
-  K_fixed <- 3700000
-  message("Full nlme() fit failed:\n  ",
-          attr(full_fit, "condition")$message,
-          "\n…refitting with K fixed at ",
-          K_fixed)
-  
-  logistic_growth_fixed <- function(time, r, N0)
-    logistic_growth(time, K_fixed, r, N0)
-  
+try_full <- try(nlme(
+  value ~ logistic_growth(shifted_time, K, r, N0),
+  data    = data,
+  fixed   = list(K ~ 1, r_formula),
+  random  = list(subgroup = pdDiag(r ~ 1)),
+  start   = start_vals,
+  na.action = na.omit,
+  control = nlmeControl(maxIter = 1e3, msMaxIter = 1e3, msVerbose = TRUE)
+), silent = TRUE)
+
+if (inherits(try_full, "try-error")) {
+  K_fixed <- 3.7e6
+  cat("Full nlme() failed – refitting with fixed K =", K_fixed, "\n")
+  logistic_growth_fixed <- function(t, r, N0)
+      logistic_growth(t, K_fixed, r, N0)
   nlme_mod <- nlme(
     value  ~ logistic_growth_fixed(shifted_time, r, N0),
     data   = data,
-    fixed  = as.formula(paste("r ~", formula_str)),
+    fixed  = r_formula,
     random = list(subgroup = pdDiag(r ~ 1)),
     start  = rep(init_r, n_fix),
-    na.action = na.omit,
+    na.action = na.omit
   )
+  K_est <- K_fixed
 } else {
-  nlme_mod <- full_fit 
+  nlme_mod <- try_full
+  K_est    <- fixef(nlme_mod)["K"]
 }
 
-if ("K" %in% names(fixef(nlme_mod))) {
-  K_est <- fixef(nlme_mod)["K"]   # free-estimated K
-} else {
-  K_est <- K_fixed                     # fixed K
-}
-
-combined_residuals <- data %>%
-  mutate(
-    fitted  = fitted(nlme_mod, level = 0),
-    residual   = resid (nlme_mod, level = 0, type = "normalized"),
-    fe2_val_fe1_val  = interaction(fe2_val, fe1_val,   # <-- fe2_val × fe1_val
-                               sep = ":", drop = TRUE)
-  ) %>%
+## ─────────────────────────────────────────────────────────────────────────────
+## 7)  Residual-diagnostic grid
+## ─────────────────────────────────────────────────────────────────────────────
+comb <- data %>%
+  mutate(fitted = fitted(nlme_mod, level = 0),
+         residual = resid(nlme_mod, level = 0, type = "normalized"),
+         fe2 = fe2) %>%
   filter(shifted_time > 0)
 
-# ── 1.  Residuals vs Fitted with slope -------------------------------------
-lm_fit <- lm(residual ~ fitted, data = combined_residuals)
-slope     <- coef(lm_fit)[2]
-intercept <- coef(lm_fit)[1]
+lm_fit <- lm(residual ~ fitted, data = comb)
 
-plot_resid_fitted <- ggplot(combined_residuals,
-                            aes(fitted, residual)) +
+plot_resid_fit <- ggplot(comb, aes(fitted, residual)) +
   geom_point(alpha = .5, colour = "steelblue") +
-  geom_abline(slope = slope, intercept = intercept,
-              colour = "black", linewidth = .8) +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "red") +
-  theme_minimal() +
-  labs(title     = "Residuals vs fitted",
-       subtitle  = sprintf("lm slope = %.4f", slope),
-       x = "Fitted", y = "Residual")
+  geom_abline(slope = lm_fit$coefficients[2],
+              intercept = lm_fit$coefficients[1]) +
+  geom_hline(yintercept = 0, colour = "red", linetype = "dashed") +
+  theme_minimal() + labs(title = "Residuals vs fitted")
 
-# ── 2.  Residuals vs Time  --------------------------------------------------
-plot_resid_time <- ggplot(combined_residuals,
-                          aes(shifted_time, residual)) +
+plot_resid_time <- ggplot(comb, aes(shifted_time, residual)) +
   geom_point(alpha = .5, colour = "darkgreen") +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "red") +
-  theme_minimal() +
-  labs(title = "Residuals vs time", x = "Time (h)", y = "Residual")
+  geom_hline(yintercept = 0, colour = "red", linetype = "dashed") +
+  theme_minimal() + labs(title = "Residuals vs time")
 
-# ── 3.  Q–Q plot  -----------------------------------------------------------
-plot_resid_qq <- ggplot(combined_residuals,
-                        aes(sample = residual)) +
-  stat_qq(alpha = .4, size = .6) +
-  stat_qq_line() +
-  theme_minimal() +
-  labs(title = "Residual Q–Q plot")
+plot_resid_qq <- ggplot(comb, aes(sample = residual)) +
+  stat_qq(alpha = .4) + stat_qq_line() +
+  theme_minimal() + labs(title = "Residual Q–Q")
 
-# ── 4.  Residuals vs Interaction (updated) --------------------------------
-plot_resid_subgroup <- ggplot(combined_residuals,
-                          aes(subgroup, residual)) +
+plot_resid_subgroup <- ggplot(comb, aes(subgroup, residual)) +
   geom_jitter(alpha = .3, width = .25, colour = "purple") +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "red") +
+  geom_hline(yintercept = 0, colour = "red", linetype = "dashed") +
   theme_minimal() +
-  theme(axis.text.x  = element_blank(),      # remove labels
-        axis.ticks.x = element_blank()) +    # remove tick marks
-  labs(title = "Residuals vs subgroup", x = "subgroup", y = "Residual")
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) +
+  labs(title = "Residuals vs subgroup")
 
-# ── 5.  Residuals vs fe2_val (updated) ---------------------------------------
-plot_resid_fe2_val <- ggplot(combined_residuals,
-                          aes(fe2_val, residual)) +
+plot_resid_fe2 <- ggplot(comb, aes(fe2, residual)) +
   geom_jitter(alpha = .3, width = .25, colour = "orange") +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "red") +
-  theme_minimal() +
-  facet_wrap(~fe1_val, ncol = 1) +                       # keep facets
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # 45° labels
-  labs(title = "Residuals vs fe2_val", x = "fe2_val", y = "Residual")
+  geom_hline(yintercept = 0, colour = "red", linetype = "dashed") +
+  theme_minimal() + facet_wrap(~fe1, ncol = 1) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Residuals vs second factor")
 
-# ── 6.  BLUPs for random effects -------------------------------------------
-blup_df <- ranef(nlme_mod) %>%              # list element “subgroup”
-  rownames_to_column("subgroup") %>% 
-  rename(blup_r = `r.(Intercept)`) %>%
-  mutate(subgroup = factor(subgroup, levels = subgroup))
+blup_df <- ranef(nlme_mod) %>% rownames_to_column("subgroup") %>%
+  rename(blup_r = `r.(Intercept)`)
 
-plot_blup_subgroup <- ggplot(blup_df, aes(subgroup, blup_r)) +
+plot_blup <- ggplot(blup_df, aes(subgroup, blup_r)) +
   geom_col(fill = "steelblue") +
   coord_flip() +
   theme_minimal() +
-  labs(title = "Random effect (subgroup)",
-       x = "Subgroup", y = "BLUP for r")
+  labs(title = "Random effect (subgroup)", y = "BLUP for r")
 
-# ── 6.  Arrange & export ----------------------------------------------------
-grid_3x2 <- grid.arrange(plot_resid_fitted, plot_resid_time,
-                         plot_resid_qq, plot_resid_subgroup,
-                         plot_resid_fe2_val, plot_blup_subgroup,
-                         ncol = 3)
-
+grid_3x2 <- grid.arrange(plot_resid_fit, plot_resid_time, plot_resid_qq,
+                         plot_resid_subgroup, plot_resid_fe2, plot_blup, ncol = 3)
 ggsave(file.path(output_dir, "residual_diagnostics_grid.pdf"),
-       grid_3x2, width = 13, height = 9)
+       plot = grid_3x2, width = 13, height = 9)
 
-# -------------------------------------------------------------
-# 1. Estimated marginal means for r (one per fe1_val × fe2_val)
-# -------------------------------------------------------------
-emm <- emmeans(nlme_mod, ~ fe2_val | fe1_val,    # <- interaction model
-               param = "r")
-emm_df <- as.data.frame(emm)
+## ─────────────────────────────────────────────────────────────────────────────
+## 8)  EMMs, contrasts, %-difference vs reference
+## ─────────────────────────────────────────────────────────────────────────────
+if (fe2_name != "" && ref_level != "") {
+  emm <- emmeans(nlme_mod, as.formula(paste("~ fe2 | fe1")), param = "r")
+  emm_df <- as.data.frame(emm)
 
-# -------------------------------------------------------------
-# 2. Identify the 0.00uM DMSO row in every fe1_val (= control)
-# -------------------------------------------------------------
-ctrl_df <- emm_df %>%
-  filter(fe2_val == ref_level) %>%                 # the control level
-  transmute(fe1_val,
-            ctrl_emmean = emmean,
-            ctrl_SE     = SE)
+  ctrl_df <- emm_df %>% filter(fe2 == ref_level) %>%
+    transmute(fe1, ctrl_emmean = emmean, ctrl_SE = SE)
 
-# -------------------------------------------------------------
-# 3. Join controls back, do %‑diff, SE, p‑value, adjust
-# -------------------------------------------------------------
-emm_df_pct <- emm_df %>% 
-  left_join(ctrl_df, by = "fe1_val") %>% 
-  mutate(
-    pct_diff    = 100 * (emmean / ctrl_emmean - 1),
-    pct_diff_se = 100 * SE      / ctrl_emmean
-  )
+  emm_df_pct <- emm_df %>% left_join(ctrl_df, by = "fe1") %>%
+    mutate(pct_diff = 100 * (emmean / ctrl_emmean - 1),
+           pct_diff_se = 100 * SE / ctrl_emmean)
 
-## ----- contrasts & multiplicity correction  --------------------
-cts <- contrast(emm, "trt.vs.ctrl",          # fe2_val vs control inside fe1_val
-                ref = ref_level, by = "fe1_val")
+  cts_df <- contrast(emm, "trt.vs.ctrl",
+                     ref = ref_level, by = "fe1") %>%
+    summary(infer = TRUE, adjust = "bonferroni") %>%
+    as.data.frame() %>%
+    mutate(fe2 = stringr::str_remove(contrast, paste0(" - ", ref_level,"$")),
+           signif_label = dplyr::case_when(
+             p.value < 0.0001 ~ "****",
+             p.value < 0.001  ~ "***",
+             p.value < 0.01   ~ "**",
+             p.value < 0.05   ~ "*",
+             TRUE             ~ "ns"
+           ))
 
-cts_df <- summary(cts, infer = TRUE,         # adds CI and p.value
-                  adjust = "bonferroni") |>
-  as.data.frame() |>
-  mutate(
-    fe2_val = str_remove(contrast, paste0(" - ", ref_level, "$")),
-    signif_label = case_when(
-      p.value < 0.0001 ~ "****",
-      p.value < 0.001 ~ "***",
-      p.value < 0.01  ~ "**",
-      p.value < 0.05  ~ "*",
-      TRUE            ~ "ns"
-    )
-  ) |>
-  select(fe1_val, fe2_val, signif_label)
+  emm_df_pct <- emm_df_pct %>%
+    left_join(cts_df %>% select(fe1, fe2, signif_label),
+              by = c("fe1", "fe2")) %>%
+    mutate(signif_label = dplyr::coalesce(signif_label, "")) %>%
+    group_by(fe1) %>% mutate(fe2 = forcats::fct_reorder(fe2, pct_diff)) %>% ungroup()
 
-## merge the labels back
-emm_df_pct <- emm_df_pct |>
-  left_join(cts_df, by = c("fe1_val", "fe2_val")) |>
-  mutate(signif_label = if_else(fe2_val == ref_level, "", signif_label))
+  plot_pct <- ggplot(emm_df_pct,
+                     aes(fe2, pct_diff, fill = fe1)) +
+    geom_col(position = position_dodge(.9)) +
+    geom_errorbar(aes(ymin = pct_diff - pct_diff_se,
+                      ymax = pct_diff + pct_diff_se),
+                  width = .3,
+                  position = position_dodge(.9)) +
+    geom_text(aes(label = signif_label,
+                  y = pct_diff + ifelse(pct_diff >= 0,
+                                        pct_diff_se, -pct_diff_se) +
+                        ifelse(pct_diff >= 0, 1, -2)),
+              position = position_dodge(.9), vjust = 0, size = 5) +
+    theme_classic(base_size = 12) +
+    labs(title = paste("Growth-rate vs", ref_level),
+         x = fe2_name,
+         y = paste("Percent difference vs", ref_level, "(%)")) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
+  print(plot_pct)
+  ggsave(file.path(output_dir, "percent_diff_vs_ref.pdf"),
+         plot = plot_pct, width = 7, height = 5)
+}
 
-# -------------------------------------------------------------
-# 5. (optional) order fe2_vals within each fe1_val by effect size
-# -------------------------------------------------------------
-emm_df_pct <- emm_df_pct %>% 
-  group_by(fe1_val) %>% 
-  mutate(fe2_val = fct_reorder(fe2_val, pct_diff)) %>% 
-  ungroup()
+## ─────────────────────────────────────────────────────────────────────────────
+## 9)  Main-effect bar plots
+## ─────────────────────────────────────────────────────────────────────────────
+emm_fe1 <- emmeans(nlme_mod, ~ fe1, param = "r")
+plot_fe1 <- ggplot(as.data.frame(emm_fe1),
+                   aes(fe1, emmean*2400)) +
+  geom_col(fill = "steelblue") +
+  geom_errorbar(aes(ymin = emmean*2400 - SE*2400,
+                    ymax = emmean*2400 + SE*2400),
+                width = .25) +
+  theme_classic(base_size = 12) +
+  labs(title = paste("Growth rate by", fe1_name),
+       x = fe1_name, y = "Percent growth per day") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(plot_fe1)
+ggsave(file.path(output_dir, paste0(fe1_name, "_main.pdf")),
+       plot = plot_fe1, width = 7, height = 5)
 
-##############################################################################
-##  5)  Assemble per-well r components                ────────────────────────
-##############################################################################
-library(tibble)
-library(dplyr)
+if (fe2_name != "") {
+  emm_fe2 <- emmeans(nlme_mod, ~ fe2, param = "r")
+  plot_fe2 <- ggplot(as.data.frame(emm_fe2),
+                     aes(fe2, emmean*2400)) +
+    geom_col(fill = "steelblue") +
+    geom_errorbar(aes(ymin = emmean*2400 - SE*2400,
+                      ymax = emmean*2400 + SE*2400),
+                  width = .25) +
+    theme_classic(base_size = 12) +
+    labs(title = paste("Growth rate by", fe2_name),
+         x = fe2_name, y = "Percent growth per day") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(plot_fe2)
+  ggsave(file.path(output_dir, paste0(fe2_name, "_main.pdf")),
+         plot = plot_fe2, width = 7, height = 5)
+}
 
-## --- 5·a  Fixed part  -------------------------------------------------------
-fe <- fixef(nlme_mod)
-names(fe) <- sub("^r\\.", "", names(fe))      # drop the “r.” prefix
+## ─────────────────────────────────────────────────────────────────────────────
+## 10)  Interaction plot with labels
+## ─────────────────────────────────────────────────────────────────────────────
+if (fe2_name != "" && ref_level != "") {
+  emmip_df <- emmip(nlme_mod, fe1 ~ fe2, param = "r",
+                    CIs = TRUE, plotit = FALSE) %>% as_tibble() %>%
+    mutate(emmean = yvar*2400, SE = SE*2400, LCL = LCL*2400, UCL = UCL*2400)
 
-well_tbl <- data %>%
-  select(fe1_val, fe2_val, subgroup, well) %>%
-  distinct()
+  label_df <- emmip_df %>%
+    left_join(cts_df, by = c("fe1", "fe2")) %>%
+    mutate(signif_label = replace_na(signif_label, ""))
 
-mm <- model.matrix(as.formula(paste("~", formula_str)), data = well_tbl)
+  interaction_plot <- ggplot(label_df,
+                             aes(fe2, emmean, colour = fe1, group = fe1)) +
+    geom_line(linewidth = 2) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = LCL, ymax = UCL),
+                  width = .1, linewidth = 1) +
+    geom_text(aes(y = UCL, label = signif_label),
+              vjust = -0.4, size = 6, colour = "black") +
+    theme_classic(base_size = 12) +
+    labs(title = paste(fe2_name, "effect across", fe1_name),
+         x = fe2_name, y = "Percent growth per day") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(interaction_plot)
+  ggsave(file.path(output_dir, "interaction_plot.pdf"),
+         plot = interaction_plot, width = 9, height = 6)
+}
 
-# keep only the columns that survived in the fitted model
+## ─────────────────────────────────────────────────────────────────────────────
+## 11)  Per-well r̂ components
+## ─────────────────────────────────────────────────────────────────────────────
+fe <- fixef(nlme_mod); names(fe) <- sub("^r\\.", "", names(fe))
+
+well_tbl <- data %>% select(fe1, fe2, subgroup, well) %>% distinct()
+mm <- model.matrix(~ fe1 * fe2, data = well_tbl)
 keep_cols <- intersect(colnames(mm), names(fe))
-mm        <- mm[, keep_cols, drop = FALSE]
-fe_vec    <- fe [ keep_cols ]
+well_tbl$r_fixed <- as.numeric(mm[, keep_cols, drop = FALSE] %*% fe[keep_cols])
 
-well_tbl$r_fixed <- as.numeric(mm %*% fe_vec)
+re_subgroup_df <- ranef(nlme_mod) %>% as.data.frame() %>%
+  filter(term == "r.(Intercept)") %>%
+  transmute(subgroup = level, r_subgroup_re = estimate)
 
-## --- 5·b  Random intercepts (single “subgroup” grouping) -----------------------
-re_subgroup_df <- ranef(nlme_mod) %>%          # <- now a data frame
-  as.data.frame() %>%                      # columns: group, term, level, estimate
-  filter(term == "r.(Intercept)") %>%      # keep the intercepts
-  transmute(subgroup      = level,             # rename for the join
-            r_subgroup_re = estimate)
+well_components <- well_tbl %>%
+  left_join(re_subgroup_df, by = "subgroup") %>%
+  mutate(r_subgroup_re = coalesce(r_subgroup_re, 0),
+         total_r_manual = r_fixed + r_subgroup_re)
 
-## --- 5·c  Combine -----------------------------------------------------------
-well_components <- well_tbl %>% 
-  left_join(re_subgroup_df, by = "subgroup") %>% 
-  mutate(
-    r_subgroup_re      = coalesce(r_subgroup_re, 0),
-    total_r_manual = r_fixed + r_subgroup_re
-  )
+## ─────────────────────────────────────────────────────────────────────────────
+## 12)  Predicted vs observed curves
+## ─────────────────────────────────────────────────────────────────────────────
+fit_data <- data %>%
+  group_by(fe1, fe2, subgroup, well, time, shifted_time, Tref) %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            N0 = mean(N0), .groups = "drop") %>%
+  left_join(well_components %>% select(fe1, fe2, subgroup, well, total_r_manual),
+            by = c("fe1","fe2","subgroup","well"))
 
-##  FE1 main-effect ---------------------------------------------------
-emm_fe1_val <- emmeans(nlme_mod, ~ fe1_val, param = "r")
-emm_fe1_val_df <- as.data.frame(emm_fe1_val)
-
-plot_fe1_val_effect <- ggplot(emm_fe1_val_df,
-                               aes(x = fe1_val, y = emmean*2400)) +
-  geom_col(fill = "steelblue") +
-  geom_errorbar(aes(ymin = emmean*2400 - SE*2400, ymax = emmean*2400 + SE*2400),
-                width = .25, linewidth = .9) +
-  theme_classic(base_size = 12) +
-  labs(title = paste("Growth Rate by", fe1_label),
-       x = fe1_label, y = "Percent Growth Per Day") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-plot_fe1_val_effect
-ggsave(file.path(output_dir, "fe1_val_main_effect.pdf"),
-       plot = plot_fe1_val_effect, width = 7, height = 5)
-
-##  FE2 main-effect ---------------------------------------------------
-emm_fe2_val <- emmeans(nlme_mod, ~ fe2_val, param = "r")
-emm_fe2_val_df <- as.data.frame(emm_fe2_val)
-
-plot_fe2_val_effect <- ggplot(emm_fe2_val_df,
-                               aes(x = fe2_val, y = emmean*2400)) +
-  geom_col(fill = "steelblue") +
-  geom_errorbar(aes(ymin = emmean*2400 - SE*2400, ymax = emmean*2400 + SE*2400),
-                width = .25, linewidth = .9) +
-  theme_classic(base_size = 12) +
-  labs(title = paste("Growth Rate by", fe2_label),
-       x = fe2_label, y = "Percent Growth Per Day") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-plot_fe2_val_effect
-ggsave(file.path(output_dir, "fe2_val_main_effect.pdf"),
-       plot = plot_fe2_val_effect, width = 7, height = 5)
-
-##############################################################################
-##  6)  Bar-plot: fe1_val-specific %Δr vs 0.00uM DMSO (fixed-effects model) ───────────
-##############################################################################
-# rebuild the factor with alphabetically-sorted levels
-emm_df_pct <- emm_df_pct %>% 
-  mutate(fe2_val = factor(fe2_val,               # keep the same data
-                            levels = sort(levels(fe2_val))))  # new order
-plot_fe2_val_pct <- ggplot(emm_df_pct,
-                             aes(x   = fe2_val,
-                                 y   = pct_diff,
-                                 fill = fe1_val)) +
-  geom_col(position = position_dodge(width = 0.9)) +
-  geom_errorbar(aes(ymin = pct_diff - pct_diff_se,
-                    ymax = pct_diff + pct_diff_se),
-                width = .3, size = .8,
-                position = position_dodge(width = 0.9)) +
-  geom_text(aes(label = signif_label,
-                y = pct_diff + ifelse(pct_diff >= 0,
-                                      pct_diff_se, -pct_diff_se) +
-                  ifelse(pct_diff >= 0, 1, -2)),
-            size = 8,
-            position = position_dodge(width = 0.9),
-            vjust = 0) +
-  theme_classic(base_size = 12) +
-  labs(title = "Growth-rate vs matched DMSO",
-       x     = "fe2_val",
-       y     = "Percent difference from matched DMSO (%)") +
-  theme(axis.text.x  = element_text(angle = 45, hjust = 1),
-        legend.position = "none")
-
-plot_fe2_val_pct
-ggsave(file.path(output_dir, "fe2_val_pct.pdf"),
-       plot = plot_fe1_val_effect, width = 7, height = 5)
-
-# ## ‣ 6·a   Growth-rate, r̂, for every subgroup (clone) ---------------------------
-# subgroup_r_tbl <- well_components %>%                       # 1 row / well
-#   group_by(subgroup, fe1_val, fe2_val) %>%                 # collapse
-#   summarise(r_subgroup = mean(total_r_manual), .groups = "drop")
-# 
-# ## ‣ 6·b   fe1_val-specific 0.00uM DMSO reference  (one row per fe1_val) ---------------
-# ctrl_r_tbl <- subgroup_r_tbl %>%                 # ← starts from the per-subgroup table
-#   filter(fe2_val == "0.00uM DMSO") %>%             # keep the 0.00uM DMSO subgroups
-#   group_by(fe1_val) %>%                       # one fe1_val at a time
-#   summarise(r_ctrl = mean(r_subgroup),           # mean of all its 0.00uM DMSO clones
-#             .groups = "drop")
-# 
-# ## ‣ 6·c   Percent-difference vs that 0.00uM DMSO ------------------------------------
-# subgroup_pct_tbl <- subgroup_r_tbl %>%
-#   left_join(ctrl_r_tbl, by = "fe1_val") %>%
-#   mutate(pct_diff = 100 * (r_subgroup / r_ctrl - 1))
-# 
-# ## ‣ 6·d   Overlay the jitter-dodged points ----------------------------------
-# plot_fe2_val_pct <- plot_fe2_val_pct +
-#   geom_point(data = subgroup_pct_tbl,
-#              aes(x      = fe2_val,
-#                  y      = pct_diff),         # colour matches the bars
-#              position = position_jitterdodge(
-#                dodge.width  = 0.9,         # align with bars
-#                jitter.width = 0.25),       # horizontal spread
-#              size   = 2.2,
-#              alpha  = 0.85,
-#              shape  = 21,
-#              stroke = 0.25)
-
-##############################################################################
-##  FE2 × FE1 interaction – annotate significance vs 0.00 µM DMSO
-##############################################################################
-
-## 1.  Get the estimated marginal means that emmip() would plot
-##     (plotit = FALSE returns the data instead of the ggplot object)
-emmip_df <- emmip(
-  nlme_mod,
-  fe1_val ~ fe2_val,
-  param  = "r",
-  CIs    = TRUE,
-  plotit = FALSE               # <-- just give me the data frame
-) |>
-  as_tibble() |>
-  mutate(
-    emmean = yvar*2400,             # make names match earlier data frames
-    SE     = SE*2400,
-    LCL    = LCL*2400,
-    UCL    = UCL*2400
-  )
-
-## 2.  Attach the “*, **, ***” labels that you already computed
-label_df <- emmip_df |>
-  left_join(cts_df, by = c("fe1_val", "fe2_val")) |>
-  mutate(signif_label = replace_na(signif_label, ""))     # baseline → ""
-
-## 3.  Build a fresh interaction plot with the labels
-interaction_plot <- ggplot(
-  label_df,
-  aes(fe2_val, emmean,
-      colour = fe1_val, group = fe1_val)
-) +
-  geom_line(linewidth = 2) +
-  geom_point(size = 3) +
-  geom_errorbar(aes(ymin = LCL, ymax = UCL), width = .1, linewidth = 1) +
-  geom_text(
-    aes(y = UCL, label = signif_label),
-    vjust = -0.4,            # move ~0.4 line-heights above the bar
-    size  = 6,
-    fontface = "bold",
-    colour = "black"
-  ) +
-  theme_classic(base_size = 12) +
-  labs(
-    title = paste(fe2_label, "Effect across", fe1_label, "Levels"),
-    x = fe2_label,
-    y = "Percent Growth per Day"
-  ) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    legend.position = "right"
-  )
-
-ggsave(
-  file.path(output_dir, "interaction_fe2_val_by_fe1_val_sig.pdf"),
-  plot  = interaction_plot,
-  width = 9, height = 6
-)
-interaction_plot
-
-##############################################################################
-##  7)  Predicted growth curves vs observed (per-well r̂)  ───────────────────
-##############################################################################
-
-# ── aggregate observed means per well/time ───────────────────────────────────
-fit_data <- data %>% 
-  group_by(subgroup, well, time, shifted_time, Tref) %>% 
-  summarise(
-    value = mean(value, na.rm = TRUE),
-    N0    = mean(N0),
-    .groups = "drop"
-  ) %>% 
-  left_join(
-    well_components %>% select(subgroup, well, total_r_manual),
-    by = c("subgroup", "well")
-  )
-
-# ── prediction grid per well ────────────────────────────────────────────────
-pred_grid_well <- fit_data %>% 
-  group_by(subgroup, well) %>% 
-  summarise(
-    min_time = 0,
-    max_time = max(shifted_time),
-    N0_well  = first(N0),
-    r        = first(total_r_manual),
-    .groups = "drop"
-  ) %>% 
-  rowwise() %>% 
+pred_grid_well <- fit_data %>%
+  group_by(fe1, fe2, subgroup, well) %>%
+  summarise(min_time = 0,
+            max_time = max(shifted_time),
+            N0_well = first(N0),
+            r = first(total_r_manual), .groups = "drop") %>%
+  rowwise() %>%
   do({
-    t_seq <- seq(.$min_time, .$max_time, length.out = 100)
-    tibble(
-      subgroup = .$subgroup,
-      well = .$well,
-      shifted_time = t_seq,
-      pred = logistic_growth(t_seq, K_est, .$r, .$N0_well)
-    )
-  }) %>% 
-  ungroup()
-
-pred_grid_well <- pred_grid_well %>% 
-  left_join(fit_data %>% distinct(subgroup, well, Tref),
-            by = c("subgroup", "well")) %>% 
+    ts <- seq(.$min_time, .$max_time, length.out = 100)
+    tibble(fe1 = .$fe1, fe2 = .$fe2, subgroup = .$subgroup, well = .$well,
+           shifted_time = ts,
+           pred = logistic_growth(ts, K_est, .$r, .$N0_well))
+  }) %>% ungroup() %>%
+  left_join(fit_data %>% distinct(fe1, fe2, subgroup, well, Tref),
+            by = c("fe1","fe2","subgroup","well")) %>%
   mutate(time = shifted_time + Tref)
 
-##############################################################################
-##  7)  Predicted growth curves vs observed (per-well r̂)  ───────────────────
-##############################################################################
+facet_end_medians <- fit_data %>%
+  group_by(fe1, fe2) %>%
+  filter(time == max(time)) %>%
+  summarise(median_latest = median(value), .groups = "drop")
+hline_vals <- range(facet_end_medians$median_latest, na.rm = TRUE)
 
-# ── aggregate observed means per well/time ──────────────────────────────────
-fit_data <- data %>% 
-  group_by(                    # keep the meta-columns!
-    fe2_val, fe1_val,       #  ← NEW
-    subgroup, well,
-    time, shifted_time, Tref
-  ) %>% 
-  summarise(
-    value = mean(value, na.rm = TRUE),
-    N0    = mean(N0),
-    .groups = "drop"
-  ) %>% 
-  left_join(
-    well_components %>% 
-      select(fe2_val, fe1_val, subgroup, well, total_r_manual),  # ← NEW
-    by = c("fe2_val", "fe1_val", "subgroup", "well")             # ← NEW
-  )
+y_range <- range(c(pred_grid_well$pred, fit_data$value,
+                   fit_data$N0, hline_vals), na.rm = TRUE)
 
-# ── prediction grid per well ────────────────────────────────────────────────
-pred_grid_well <- fit_data %>% 
-  group_by(fe2_val, fe1_val, subgroup, well) %>%   # ← keep meta-cols
-  summarise(
-    min_time = 0,
-    max_time = max(shifted_time),
-    N0_well  = first(N0),
-    r        = first(total_r_manual),
-    .groups = "drop"
-  ) %>% 
-  rowwise() %>% 
-  do({
-    t_seq <- seq(.$min_time, .$max_time, length.out = 100)
-    tibble(
-      fe2_val = .$fe2_val,          # ← copy down
-      fe1_val  = .$fe1_val,           # ← copy down
-      subgroup  = .$subgroup,
-      well      = .$well,
-      shifted_time = t_seq,
-      pred = logistic_growth(t_seq, K_est, .$r, .$N0_well)
-    )
-  }) %>% 
-  ungroup() %>% 
-  left_join(
-    fit_data %>% 
-      distinct(fe2_val, fe1_val, subgroup, well, Tref),
-    by = c("fe2_val", "fe1_val", "subgroup", "well")
-  ) %>% 
-  mutate(time = shifted_time + Tref)
-
-##############################################################################
-##  8·b  Plot: linear & log scales  ──────────────────────────────────────────
-##############################################################################
-library(ggplot2)
-
-facet_end_medians <- fit_data %>%                       # one row per facet
-  group_by(fe1_val, fe2_val) %>%                   # ⬅ facets
-  filter(time == max(time, na.rm = TRUE)) %>%         # latest time-point
-  summarise(median_latest = median(value, na.rm = TRUE),  # mean across wells
-            .groups = "drop")
-
-hline_vals <- c(                                      # two values to plot
-  min(facet_end_medians$median_latest, na.rm = TRUE),     # “lowest” facet
-  max(facet_end_medians$median_latest, na.rm = TRUE)      # “greatest” facet
-)
-
-## 1. find a global y-range -------------------------------------------------
-y_range <- range(
-  c(pred_grid_well$pred,
-    fit_data$value,
-    fit_data$N0,
-    hline_vals),            # include the new lines so they’re never clipped
-  na.rm = TRUE
-)
-
-## 2. linear scale ----------------------------------------------------------
 curves_linear <- ggplot() +
-  geom_line(
-    data  = pred_grid_well,
-    aes(time, pred, group = well),
-    alpha = 0.5
-  ) +
-  geom_point(
-    data  = fit_data,
-    aes(time, value),
-    size  = 1, alpha = 0.6, colour = "red"
-  ) +
-  geom_point(
-    data  = fit_data,
-    aes(Tref, N0),
-    size  = 1, alpha = 0.6
-  ) +
-  geom_hline(                              # <-- both reference lines
-    data = data.frame(yint = hline_vals),
-    aes(yintercept = yint),
-    linetype = "dashed", colour = "red"
-  ) +
-  facet_grid(
-    rows = vars(fe1_val),
-    cols = vars(fe2_val)
-  ) +
+  geom_line(data = pred_grid_well, aes(time, pred, group = well), alpha = .5) +
+  geom_point(data = fit_data, aes(time, value), size = 1,
+             colour = "red", alpha = .6) +
+  geom_point(data = fit_data, aes(Tref, N0), size = 1, alpha = .6) +
+  geom_hline(data = data.frame(yint = hline_vals),
+             aes(yintercept = yint), colour = "red", linetype = "dashed") +
+  facet_grid(rows = vars(fe1), cols = vars(fe2)) +
   coord_cartesian(ylim = y_range) +
   theme_minimal() +
-  labs(
-    title = "Predicted vs Observed Growth Curves per Well",
-    x = "Time (hrs)",
-    y = "Cell Density"
-  )
+  labs(title = "Predicted vs Observed Growth Curves per Well",
+       x = "Time (hrs)", y = "Cell Density")
+print(curves_linear)
 
-## 3. log scale -------------------------------------------------------------
 log_range <- y_range
 log_range[1] <- ifelse(log_range[1] <= 0,
                        min(pred_grid_well$pred[pred_grid_well$pred > 0]),
@@ -752,13 +448,12 @@ log_range[1] <- ifelse(log_range[1] <= 0,
 curves_log <- curves_linear +
   scale_y_log10(limits = log_range) +
   labs(title = "Predicted vs Observed Growth Curves per Well (log-scale)")
+print(curves_log)
 
-## 4. save & print ----------------------------------------------------------
 ggsave(file.path(output_dir, "predicted_vs_observed_linear.pdf"),
        plot = curves_linear, width = 12, height = 9)
-
 ggsave(file.path(output_dir, "predicted_vs_observed_log.pdf"),
-       plot = curves_log, width = 12, height = 9)
+       plot = curves_log,    width = 12, height = 9)
 
-print(curves_linear)
-print(curves_log)
+###############################################################################
+cat("\nAnalysis complete — results in:\n   ", output_dir, "\n")
