@@ -26,28 +26,34 @@ ref_level <- if (length(args) >= 5) args[5] else ""
 raw <- read.csv(input_csv)
 if (fe1 != "") {
   col1 <- make.names(paste0("Group-", fe1))
-  raw$genotype <- factor(raw[[col1]])
+  if (! col1 %in% names(raw)) raw[[col1]] <- NA_character_
+  raw$fe1_val <- factor(raw[[col1]])
 } else {
-  raw$genotype <- factor("all")
+  raw$fe1_val <- factor("all")
 }
 if (fe2 != "") {
   col2 <- make.names(paste0("Group-", fe2))
-  raw$treatment <- factor(raw[[col2]])
+  if (! col2 %in% names(raw)) raw[[col2]] <- NA_character_
+  raw$fe2_val <- factor(raw[[col2]])
   if (interaction_flag && ref_level != "")
-    raw$treatment <- relevel(raw$treatment, ref_level)
+    raw$fe2_val <- relevel(raw$fe2_val, ref_level)
 } else {
-  raw$treatment <- factor("all")
+  raw$fe2_val <- factor("all")
 }
 if (ref_level == "" && fe2 != "") {
-  ref_level <- levels(raw$treatment)[1]
+  ref_level <- levels(raw$fe2_val)[1]
 }
+fe1_label <- if (fe1 != "") fe1 else "FE1"
+fe2_label <- if (fe2 != "") fe2 else "FE2"
 data <- raw %>%
   mutate(well = PlateWell,
          subgroup = well) %>%
   rename(time = "Relative.Time..hrs.",
          value = cell_density)
   # filter(time < 80 | time > 100)
-output_dir <- file.path(dirname(input_csv), "model_treatment_genotype", "logistic_growth_by_genotype")
+output_dir <- file.path(dirname(input_csv),
+                        sprintf("model_%s_%s", fe2_label, fe1_label),
+                        "logistic_growth")
 if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
 pdf(
@@ -60,21 +66,21 @@ pdf(
 on.exit(dev.off(), add = TRUE)   # closes the device even if the script errors
 
 data <- data %>% 
-  arrange(subgroup, treatment, genotype, well, time) %>%          # make “first” reliable
-  group_by(subgroup, treatment, genotype, well) %>% 
+  arrange(subgroup, fe2_val, fe1_val, well, time) %>%          # make “first” reliable
+  group_by(subgroup, fe2_val, fe1_val, well) %>% 
   mutate(
     Tref         = first(time),                # earliest absolute time in the well
     shifted_time = time - Tref
   ) %>% 
   # ── PER-WELL AVERAGE AT EACH TIME POINT ──────────────────────────────
-  group_by(subgroup, treatment, genotype, well, shifted_time, time, Tref) %>% 
+  group_by(subgroup, fe2_val, fe1_val, well, shifted_time, time, Tref) %>% 
   summarise(
     value = mean(value, na.rm = TRUE),         # mean per well/time point
     .groups = "drop"
   ) %>% 
   # ── N0 = MEAN AT THE FIRST TIME POINT ────────────────────────────────
-  arrange(subgroup, treatment, genotype, well, shifted_time, time, Tref) %>%  # ensure first row is earliest
-  group_by(subgroup, treatment, genotype, well) %>%               
+  arrange(subgroup, fe2_val, fe1_val, well, shifted_time, time, Tref) %>%  # ensure first row is earliest
+  group_by(subgroup, fe2_val, fe1_val, well) %>%               
   mutate(N0 = first(value)) %>%                # first *mean* value in each well
   ungroup()
 
@@ -135,10 +141,10 @@ p_dist_facet <- ggplot(
     minor_breaks = rep(1:9, 20) * 10^rep(-9:10, each = 9),
     labels = label_number(accuracy = 1),   # <-- plain-number ticks,
   ) +
-  facet_wrap(~treatment, ncol = 1, strip.position = "right") +
+  facet_wrap(~fe2_val, ncol = 1, strip.position = "right") +
   guides(colour = "none") +
   labs(
-    title  = "QC filter for starting density (N0) - Facet by treatment, Color by subgroup",
+    title  = "QC filter for starting density (N0) - Facet by fe2_val, Color by subgroup",
     x      = "Starting Density (N0)",
     y      = NULL,
     colour = "subgroup"
@@ -171,7 +177,7 @@ p_dist_facet <- ggplot(
   )
 
 p_dist_facet   # draw the plot
-ggsave(file.path(output_dir, "qc_N0_distribution_facet_treatment.pdf"),
+ggsave(file.path(output_dir, "qc_N0_distribution_facet_fe2_val.pdf"),
        plot = p_dist_facet, width = 8, height = 12)
 
 data <- data %>% filter(N0 > starting_density_filter_min)
@@ -184,14 +190,14 @@ logistic_growth <- function(time, K, r, N0) {
 
 formula_str <- if (fe1 != "" && fe2 != "") {
   if (interaction_flag) {
-    paste(fe1, "*", fe2)
+    "fe1_val * fe2_val"
   } else {
-    paste(fe1, "+", fe2)
+    "fe1_val + fe2_val"
   }
 } else if (fe1 != "") {
-  fe1
+  "fe1_val"
 } else {
-  fe2
+  "fe2_val"
 }
 n_fix <- ncol(model.matrix(as.formula(paste("~", formula_str)), data))
 init_K <- max(data[["value"]], na.rm = TRUE) * 1.1
@@ -247,7 +253,7 @@ combined_residuals <- data %>%
   mutate(
     fitted  = fitted(nlme_mod, level = 0),
     residual   = resid (nlme_mod, level = 0, type = "normalized"),
-    treatment_genotype  = interaction(treatment, genotype,   # <-- treatment × genotype
+    fe2_val_fe1_val  = interaction(fe2_val, fe1_val,   # <-- fe2_val × fe1_val
                                sep = ":", drop = TRUE)
   ) %>%
   filter(shifted_time > 0)
@@ -294,15 +300,15 @@ plot_resid_subgroup <- ggplot(combined_residuals,
         axis.ticks.x = element_blank()) +    # remove tick marks
   labs(title = "Residuals vs subgroup", x = "subgroup", y = "Residual")
 
-# ── 5.  Residuals vs treatment (updated) ---------------------------------------
-plot_resid_treatment <- ggplot(combined_residuals,
-                          aes(treatment, residual)) +
+# ── 5.  Residuals vs fe2_val (updated) ---------------------------------------
+plot_resid_fe2_val <- ggplot(combined_residuals,
+                          aes(fe2_val, residual)) +
   geom_jitter(alpha = .3, width = .25, colour = "orange") +
   geom_hline(yintercept = 0, linetype = "dashed", colour = "red") +
   theme_minimal() +
-  facet_wrap(~genotype, ncol = 1) +                       # keep facets
+  facet_wrap(~fe1_val, ncol = 1) +                       # keep facets
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # 45° labels
-  labs(title = "Residuals vs treatment", x = "treatment", y = "Residual")
+  labs(title = "Residuals vs fe2_val", x = "fe2_val", y = "Residual")
 
 # ── 6.  BLUPs for random effects -------------------------------------------
 blup_df <- ranef(nlme_mod) %>%              # list element “subgroup”
@@ -320,25 +326,25 @@ plot_blup_subgroup <- ggplot(blup_df, aes(subgroup, blup_r)) +
 # ── 6.  Arrange & export ----------------------------------------------------
 grid_3x2 <- grid.arrange(plot_resid_fitted, plot_resid_time,
                          plot_resid_qq, plot_resid_subgroup,
-                         plot_resid_treatment, plot_blup_subgroup,
+                         plot_resid_fe2_val, plot_blup_subgroup,
                          ncol = 3)
 
 ggsave(file.path(output_dir, "residual_diagnostics_grid.pdf"),
        grid_3x2, width = 13, height = 9)
 
 # -------------------------------------------------------------
-# 1. Estimated marginal means for r (one per genotype × treatment)
+# 1. Estimated marginal means for r (one per fe1_val × fe2_val)
 # -------------------------------------------------------------
-emm <- emmeans(nlme_mod, ~ treatment | genotype,    # <- interaction model
+emm <- emmeans(nlme_mod, ~ fe2_val | fe1_val,    # <- interaction model
                param = "r")
 emm_df <- as.data.frame(emm)
 
 # -------------------------------------------------------------
-# 2. Identify the 0.00uM DMSO row in every genotype (= control)
+# 2. Identify the 0.00uM DMSO row in every fe1_val (= control)
 # -------------------------------------------------------------
 ctrl_df <- emm_df %>%
-  filter(treatment == ref_level) %>%                 # the control level
-  transmute(genotype,
+  filter(fe2_val == ref_level) %>%                 # the control level
+  transmute(fe1_val,
             ctrl_emmean = emmean,
             ctrl_SE     = SE)
 
@@ -346,21 +352,21 @@ ctrl_df <- emm_df %>%
 # 3. Join controls back, do %‑diff, SE, p‑value, adjust
 # -------------------------------------------------------------
 emm_df_pct <- emm_df %>% 
-  left_join(ctrl_df, by = "genotype") %>% 
+  left_join(ctrl_df, by = "fe1_val") %>% 
   mutate(
     pct_diff    = 100 * (emmean / ctrl_emmean - 1),
     pct_diff_se = 100 * SE      / ctrl_emmean
   )
 
 ## ----- contrasts & multiplicity correction  --------------------
-cts <- contrast(emm, "trt.vs.ctrl",          # treatment vs control inside genotype
-                ref = ref_level, by = "genotype")
+cts <- contrast(emm, "trt.vs.ctrl",          # fe2_val vs control inside fe1_val
+                ref = ref_level, by = "fe1_val")
 
 cts_df <- summary(cts, infer = TRUE,         # adds CI and p.value
                   adjust = "bonferroni") |>
   as.data.frame() |>
   mutate(
-    treatment = str_remove(contrast, paste0(" - ", ref_level, "$")),
+    fe2_val = str_remove(contrast, paste0(" - ", ref_level, "$")),
     signif_label = case_when(
       p.value < 0.0001 ~ "****",
       p.value < 0.001 ~ "***",
@@ -369,19 +375,19 @@ cts_df <- summary(cts, infer = TRUE,         # adds CI and p.value
       TRUE            ~ "ns"
     )
   ) |>
-  select(genotype, treatment, signif_label)
+  select(fe1_val, fe2_val, signif_label)
 
 ## merge the labels back
 emm_df_pct <- emm_df_pct |>
-  left_join(cts_df, by = c("genotype", "treatment")) |>
-  mutate(signif_label = if_else(treatment == ref_level, "", signif_label))
+  left_join(cts_df, by = c("fe1_val", "fe2_val")) |>
+  mutate(signif_label = if_else(fe2_val == ref_level, "", signif_label))
 
 # -------------------------------------------------------------
-# 5. (optional) order treatments within each genotype by effect size
+# 5. (optional) order fe2_vals within each fe1_val by effect size
 # -------------------------------------------------------------
 emm_df_pct <- emm_df_pct %>% 
-  group_by(genotype) %>% 
-  mutate(treatment = fct_reorder(treatment, pct_diff)) %>% 
+  group_by(fe1_val) %>% 
+  mutate(fe2_val = fct_reorder(fe2_val, pct_diff)) %>% 
   ungroup()
 
 ##############################################################################
@@ -395,7 +401,7 @@ fe <- fixef(nlme_mod)
 names(fe) <- sub("^r\\.", "", names(fe))      # drop the “r.” prefix
 
 well_tbl <- data %>%
-  select(genotype, treatment, subgroup, well) %>%
+  select(fe1_val, fe2_val, subgroup, well) %>%
   distinct()
 
 mm <- model.matrix(as.formula(paste("~", formula_str)), data = well_tbl)
@@ -422,53 +428,53 @@ well_components <- well_tbl %>%
     total_r_manual = r_fixed + r_subgroup_re
   )
 
-##  Genotype main-effect ---------------------------------------------------
-emm_genotype <- emmeans(nlme_mod, ~ genotype, param = "r")
-emm_genotype_df <- as.data.frame(emm_genotype)
+##  FE1 main-effect ---------------------------------------------------
+emm_fe1_val <- emmeans(nlme_mod, ~ fe1_val, param = "r")
+emm_fe1_val_df <- as.data.frame(emm_fe1_val)
 
-plot_genotype_effect <- ggplot(emm_genotype_df,
-                               aes(x = genotype, y = emmean*2400)) +
+plot_fe1_val_effect <- ggplot(emm_fe1_val_df,
+                               aes(x = fe1_val, y = emmean*2400)) +
   geom_col(fill = "steelblue") +
   geom_errorbar(aes(ymin = emmean*2400 - SE*2400, ymax = emmean*2400 + SE*2400),
                 width = .25, linewidth = .9) +
   theme_classic(base_size = 12) +
-  labs(title = "Growth Rate by Genotype",
-       x = "genotype", y = "Percent Growth Per Day") +
+  labs(title = paste("Growth Rate by", fe1_label),
+       x = fe1_label, y = "Percent Growth Per Day") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-plot_genotype_effect
-ggsave(file.path(output_dir, "genotype_main_effect.pdf"),
-       plot = plot_genotype_effect, width = 7, height = 5)
+plot_fe1_val_effect
+ggsave(file.path(output_dir, "fe1_val_main_effect.pdf"),
+       plot = plot_fe1_val_effect, width = 7, height = 5)
 
-##  Treatment main-effect ---------------------------------------------------
-emm_treatment <- emmeans(nlme_mod, ~ treatment, param = "r")
-emm_treatment_df <- as.data.frame(emm_treatment)
+##  FE2 main-effect ---------------------------------------------------
+emm_fe2_val <- emmeans(nlme_mod, ~ fe2_val, param = "r")
+emm_fe2_val_df <- as.data.frame(emm_fe2_val)
 
-plot_treatment_effect <- ggplot(emm_treatment_df,
-                               aes(x = treatment, y = emmean*2400)) +
+plot_fe2_val_effect <- ggplot(emm_fe2_val_df,
+                               aes(x = fe2_val, y = emmean*2400)) +
   geom_col(fill = "steelblue") +
   geom_errorbar(aes(ymin = emmean*2400 - SE*2400, ymax = emmean*2400 + SE*2400),
                 width = .25, linewidth = .9) +
   theme_classic(base_size = 12) +
-  labs(title = "Growth Rate by Treatment",
-       x = "genotype", y = "Percent Growth Per Day") +
+  labs(title = paste("Growth Rate by", fe2_label),
+       x = fe2_label, y = "Percent Growth Per Day") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-plot_treatment_effect
-ggsave(file.path(output_dir, "treatment_main_effect.pdf"),
-       plot = plot_treatment_effect, width = 7, height = 5)
+plot_fe2_val_effect
+ggsave(file.path(output_dir, "fe2_val_main_effect.pdf"),
+       plot = plot_fe2_val_effect, width = 7, height = 5)
 
 ##############################################################################
-##  6)  Bar-plot: genotype-specific %Δr vs 0.00uM DMSO (fixed-effects model) ───────────
+##  6)  Bar-plot: fe1_val-specific %Δr vs 0.00uM DMSO (fixed-effects model) ───────────
 ##############################################################################
 # rebuild the factor with alphabetically-sorted levels
 emm_df_pct <- emm_df_pct %>% 
-  mutate(treatment = factor(treatment,               # keep the same data
-                            levels = sort(levels(treatment))))  # new order
-plot_treatment_pct <- ggplot(emm_df_pct,
-                             aes(x   = treatment,
+  mutate(fe2_val = factor(fe2_val,               # keep the same data
+                            levels = sort(levels(fe2_val))))  # new order
+plot_fe2_val_pct <- ggplot(emm_df_pct,
+                             aes(x   = fe2_val,
                                  y   = pct_diff,
-                                 fill = genotype)) +
+                                 fill = fe1_val)) +
   geom_col(position = position_dodge(width = 0.9)) +
   geom_errorbar(aes(ymin = pct_diff - pct_diff_se,
                     ymax = pct_diff + pct_diff_se),
@@ -483,36 +489,36 @@ plot_treatment_pct <- ggplot(emm_df_pct,
             vjust = 0) +
   theme_classic(base_size = 12) +
   labs(title = "Growth-rate vs matched DMSO",
-       x     = "treatment",
+       x     = "fe2_val",
        y     = "Percent difference from matched DMSO (%)") +
   theme(axis.text.x  = element_text(angle = 45, hjust = 1),
         legend.position = "none")
 
-plot_treatment_pct
-ggsave(file.path(output_dir, "treatment_pct.pdf"),
-       plot = plot_genotype_effect, width = 7, height = 5)
+plot_fe2_val_pct
+ggsave(file.path(output_dir, "fe2_val_pct.pdf"),
+       plot = plot_fe1_val_effect, width = 7, height = 5)
 
 # ## ‣ 6·a   Growth-rate, r̂, for every subgroup (clone) ---------------------------
 # subgroup_r_tbl <- well_components %>%                       # 1 row / well
-#   group_by(subgroup, genotype, treatment) %>%                 # collapse
+#   group_by(subgroup, fe1_val, fe2_val) %>%                 # collapse
 #   summarise(r_subgroup = mean(total_r_manual), .groups = "drop")
 # 
-# ## ‣ 6·b   genotype-specific 0.00uM DMSO reference  (one row per genotype) ---------------
+# ## ‣ 6·b   fe1_val-specific 0.00uM DMSO reference  (one row per fe1_val) ---------------
 # ctrl_r_tbl <- subgroup_r_tbl %>%                 # ← starts from the per-subgroup table
-#   filter(treatment == "0.00uM DMSO") %>%             # keep the 0.00uM DMSO subgroups
-#   group_by(genotype) %>%                       # one genotype at a time
+#   filter(fe2_val == "0.00uM DMSO") %>%             # keep the 0.00uM DMSO subgroups
+#   group_by(fe1_val) %>%                       # one fe1_val at a time
 #   summarise(r_ctrl = mean(r_subgroup),           # mean of all its 0.00uM DMSO clones
 #             .groups = "drop")
 # 
 # ## ‣ 6·c   Percent-difference vs that 0.00uM DMSO ------------------------------------
 # subgroup_pct_tbl <- subgroup_r_tbl %>%
-#   left_join(ctrl_r_tbl, by = "genotype") %>%
+#   left_join(ctrl_r_tbl, by = "fe1_val") %>%
 #   mutate(pct_diff = 100 * (r_subgroup / r_ctrl - 1))
 # 
 # ## ‣ 6·d   Overlay the jitter-dodged points ----------------------------------
-# plot_treatment_pct <- plot_treatment_pct +
+# plot_fe2_val_pct <- plot_fe2_val_pct +
 #   geom_point(data = subgroup_pct_tbl,
-#              aes(x      = treatment,
+#              aes(x      = fe2_val,
 #                  y      = pct_diff),         # colour matches the bars
 #              position = position_jitterdodge(
 #                dodge.width  = 0.9,         # align with bars
@@ -523,14 +529,14 @@ ggsave(file.path(output_dir, "treatment_pct.pdf"),
 #              stroke = 0.25)
 
 ##############################################################################
-##  Treatment × Genotype interaction – annotate significance vs 0.00 µM DMSO
+##  FE2 × FE1 interaction – annotate significance vs 0.00 µM DMSO
 ##############################################################################
 
 ## 1.  Get the estimated marginal means that emmip() would plot
 ##     (plotit = FALSE returns the data instead of the ggplot object)
 emmip_df <- emmip(
   nlme_mod,
-  genotype ~ treatment,
+  fe1_val ~ fe2_val,
   param  = "r",
   CIs    = TRUE,
   plotit = FALSE               # <-- just give me the data frame
@@ -545,14 +551,14 @@ emmip_df <- emmip(
 
 ## 2.  Attach the “*, **, ***” labels that you already computed
 label_df <- emmip_df |>
-  left_join(cts_df, by = c("genotype", "treatment")) |>
+  left_join(cts_df, by = c("fe1_val", "fe2_val")) |>
   mutate(signif_label = replace_na(signif_label, ""))     # baseline → ""
 
 ## 3.  Build a fresh interaction plot with the labels
 interaction_plot <- ggplot(
   label_df,
-  aes(treatment, emmean,
-      colour = genotype, group = genotype)
+  aes(fe2_val, emmean,
+      colour = fe1_val, group = fe1_val)
 ) +
   geom_line(linewidth = 2) +
   geom_point(size = 3) +
@@ -566,8 +572,8 @@ interaction_plot <- ggplot(
   ) +
   theme_classic(base_size = 12) +
   labs(
-    title = "Treatment Effect across Genotypes",
-    x = "treatment",
+    title = paste(fe2_label, "Effect across", fe1_label, "Levels"),
+    x = fe2_label,
     y = "Percent Growth per Day"
   ) +
   theme(
@@ -576,7 +582,7 @@ interaction_plot <- ggplot(
   )
 
 ggsave(
-  file.path(output_dir, "interaction_treatment_by_genotype_sig.pdf"),
+  file.path(output_dir, "interaction_fe2_val_by_fe1_val_sig.pdf"),
   plot  = interaction_plot,
   width = 9, height = 6
 )
@@ -633,7 +639,7 @@ pred_grid_well <- pred_grid_well %>%
 # ── aggregate observed means per well/time ──────────────────────────────────
 fit_data <- data %>% 
   group_by(                    # keep the meta-columns!
-    treatment, genotype,       #  ← NEW
+    fe2_val, fe1_val,       #  ← NEW
     subgroup, well,
     time, shifted_time, Tref
   ) %>% 
@@ -644,13 +650,13 @@ fit_data <- data %>%
   ) %>% 
   left_join(
     well_components %>% 
-      select(treatment, genotype, subgroup, well, total_r_manual),  # ← NEW
-    by = c("treatment", "genotype", "subgroup", "well")             # ← NEW
+      select(fe2_val, fe1_val, subgroup, well, total_r_manual),  # ← NEW
+    by = c("fe2_val", "fe1_val", "subgroup", "well")             # ← NEW
   )
 
 # ── prediction grid per well ────────────────────────────────────────────────
 pred_grid_well <- fit_data %>% 
-  group_by(treatment, genotype, subgroup, well) %>%   # ← keep meta-cols
+  group_by(fe2_val, fe1_val, subgroup, well) %>%   # ← keep meta-cols
   summarise(
     min_time = 0,
     max_time = max(shifted_time),
@@ -662,8 +668,8 @@ pred_grid_well <- fit_data %>%
   do({
     t_seq <- seq(.$min_time, .$max_time, length.out = 100)
     tibble(
-      treatment = .$treatment,          # ← copy down
-      genotype  = .$genotype,           # ← copy down
+      fe2_val = .$fe2_val,          # ← copy down
+      fe1_val  = .$fe1_val,           # ← copy down
       subgroup  = .$subgroup,
       well      = .$well,
       shifted_time = t_seq,
@@ -673,8 +679,8 @@ pred_grid_well <- fit_data %>%
   ungroup() %>% 
   left_join(
     fit_data %>% 
-      distinct(treatment, genotype, subgroup, well, Tref),
-    by = c("treatment", "genotype", "subgroup", "well")
+      distinct(fe2_val, fe1_val, subgroup, well, Tref),
+    by = c("fe2_val", "fe1_val", "subgroup", "well")
   ) %>% 
   mutate(time = shifted_time + Tref)
 
@@ -684,7 +690,7 @@ pred_grid_well <- fit_data %>%
 library(ggplot2)
 
 facet_end_medians <- fit_data %>%                       # one row per facet
-  group_by(genotype, treatment) %>%                   # ⬅ facets
+  group_by(fe1_val, fe2_val) %>%                   # ⬅ facets
   filter(time == max(time, na.rm = TRUE)) %>%         # latest time-point
   summarise(median_latest = median(value, na.rm = TRUE),  # mean across wells
             .groups = "drop")
@@ -726,8 +732,8 @@ curves_linear <- ggplot() +
     linetype = "dashed", colour = "red"
   ) +
   facet_grid(
-    rows = vars(genotype),
-    cols = vars(treatment)
+    rows = vars(fe1_val),
+    cols = vars(fe2_val)
   ) +
   coord_cartesian(ylim = y_range) +
   theme_minimal() +

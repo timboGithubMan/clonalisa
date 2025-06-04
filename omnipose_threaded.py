@@ -14,6 +14,8 @@ from cellpose_omni import models, core
 import cellpose_omni.io
 from process_masks import color_and_outline_cells_per_channel
 from config_utils import parse_filename, load_config
+import concurrent.futures as cf
+import multiprocessing as mp
 
 core.use_gpu()
 
@@ -116,6 +118,7 @@ def _run_on_subset(
     save_cellProb=False,
     save_flows=False,
     save_outlines=False,
+    progress_queue: mp.Queue | None = None,
 ):
     """
     Worker entry-point.
@@ -156,13 +159,15 @@ def _run_on_subset(
             if save_outlines and masks is not None:
                 color_and_outline_cells_per_channel(out_dir / "outlines" / f"{name}_outlines.jpg", img, masks)
 
-
             print(f"✓ {name}")
 
         except Exception as e:
             print(f"✗ {name}  (Error: {e})")
             import traceback
             traceback.print_exc() # Print full traceback for errors in worker
+        finally:
+            if progress_queue is not None:
+                progress_queue.put(1)
 
 # -----------------------------------------------------------------------------
 
@@ -191,6 +196,7 @@ def run_omnipose(
     save_flows       : save flows image
     save_outlines    : save outline image
     num_threads      : how many worker processes to spawn
+    progress_callback: optional callback(done, total) for progress reporting
 
     Returns
     -------
@@ -214,44 +220,49 @@ def run_omnipose(
         return out_dir
 
     total = len(all_groups)
-    model_filepath, flow_thresh, mask_thresh = model_info
-    model = _load_model(model_info)
-    for idx, (name, paths) in enumerate(all_groups, start=1):
-        try:
-            img = _load_and_merge(paths, z_indices)
-            img_data = [img]
-            masks_list, flows_list, _ = model.eval(
-                img_data,
-                omni=True,
-                normalize=True,
-                channels=None,
-                resample=False,
-                tile=True,
-                flow_threshold=flow_thresh,
-                mask_threshold=mask_thresh,
-                affinity_seg=True,
-                suppress=False,
+    num_workers = min(num_threads, len(all_groups))
+    if num_workers == 0:
+        print("No workers to spawn (num_threads or image count is 0).")
+        return out_dir
+
+    chunks: list[list[tuple[str, list[Path]]]] = [[] for _ in range(num_workers)]
+    for i, grp in enumerate(all_groups):
+        chunks[i % num_workers].append(grp)
+
+    chunks = [chunk for chunk in chunks if chunk]
+    actual_num_workers = len(chunks)
+
+    if progress_callback:
+        mgr = mp.Manager()
+        q: mp.Queue = mgr.Queue()
+    else:
+        q = None
+
+    with cf.ProcessPoolExecutor(max_workers=actual_num_workers) as pool:
+        futures = [
+            pool.submit(
+                _run_on_subset,
+                chunk,
+                model_info,
+                out_dir,
+                z_indices,
+                save_cellProb,
+                save_flows,
+                save_outlines,
+                q,
             )
-            masks = masks_list[0]
-            flows = flows_list[0]
-            cellpose_omni.io.imwrite(out_dir / f"{name}_cp_masks.png", masks)
-            if save_cellProb and flows is not None and len(flows) > 2 and flows[2] is not None:
-                cell_prob_map = flows[2]
-                scaled_prob_map = np.clip(cell_prob_map * 21.25, 0, 255).astype(np.uint8)
-                cellpose_omni.io.imwrite(out_dir / f"{name}_cellProb.png", scaled_prob_map)
-            if save_flows and flows is not None and len(flows) > 2 and flows[0] is not None:
-                cellpose_omni.io.imwrite(out_dir / f"{name}_flows.png", flows[0].astype(np.uint8))
-            if save_outlines and masks is not None:
-                color_and_outline_cells_per_channel(out_dir / "outlines" / f"{name}_outlines.jpg", img, masks)
-            if progress_callback:
-                progress_callback(idx, total)
-            print(f"✓ {name}")
-        except Exception as e:
-            if progress_callback:
-                progress_callback(idx, total)
-            print(f"✗ {name}  (Error: {e})")
-            import traceback
-            traceback.print_exc()
+            for chunk in chunks
+        ]
+
+        done = 0
+        if progress_callback:
+            while done < total:
+                q.get()
+                done += 1
+                progress_callback(done, total)
+
+        for fut in futures:
+            fut.result()
 
     return out_dir
 
