@@ -41,28 +41,28 @@
       <enum>Qt::Orientation::Horizontal</enum>
      </property>
      <widget class="QWidget" name="leftBar">
-      <layout class="QVBoxLayout" name="leftVBox" stretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
+      <layout class="QVBoxLayout" name="leftVBox" stretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
        <item>
         <layout class="QHBoxLayout" name="horizontalLayout_4"/>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btnConfig">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="text">
-          <string>Config</string>
-         </property>
-        </widget>
        </item>
        <item>
         <layout class="QHBoxLayout" name="layoutInput">
          <property name="bottomMargin">
           <number>0</number>
          </property>
+         <item>
+          <widget class="QPushButton" name="btnConfig">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="text">
+            <string>Config</string>
+           </property>
+          </widget>
+         </item>
          <item>
           <widget class="QLabel" name="labelInput">
            <property name="text">
@@ -254,26 +254,26 @@
        </item>
        <item>
         <widget class="QProgressBar" name="progressSubdir">
-         <property name="minimum" >
+         <property name="minimum">
           <number>0</number>
          </property>
-         <property name="maximum" >
+         <property name="maximum">
           <number>100</number>
          </property>
-         <property name="value" >
+         <property name="value">
           <number>0</number>
          </property>
         </widget>
        </item>
        <item>
         <widget class="QProgressBar" name="progressOverall">
-         <property name="minimum" >
+         <property name="minimum">
           <number>0</number>
          </property>
-         <property name="maximum" >
+         <property name="maximum">
           <number>100</number>
          </property>
-         <property name="value" >
+         <property name="value">
           <number>0</number>
          </property>
         </widget>
@@ -514,6 +514,9 @@
           <widget class="QCheckBox" name="cb_interaction">
            <property name="text">
             <string>Include Interaction</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
            </property>
           </widget>
          </item>
