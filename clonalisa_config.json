@@ -5,6 +5,16 @@
   },
   "model_history": [
     {
+      "path": "omnipose_models\\10x_NPC_nclasses_2_nchan_3_dim_2_2024_03_29_02_03_10.875324_epoch_960",
+      "flow_threshold": 0.4,
+      "mask_threshold": 0.0,
+      "z_indices": [
+        1,
+        2,
+        0
+      ]
+    },
+    {
       "path": "omnipose_models/10x_NPC_nclasses_2_nchan_3_dim_2_2024_03_29_02_03_10.875324_epoch_960",
       "flow_threshold": 0.4,
       "mask_threshold": 0.0,
