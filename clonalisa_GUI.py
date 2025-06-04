@@ -214,6 +214,7 @@ class ClonaLiSAGUI(QWidget):
         self.btnConfig.clicked.connect(self._open_config)
         self.fe2_combo.currentIndexChanged.connect(self._update_ref_levels)
         self.plate_combo.currentIndexChanged.connect(self._update_ref_levels)
+        self.csv_edit.textChanged.connect(self._update_fixed_effect_options)
         # ---------------------------------------------------------------------
 
         # internal state, preload model history …
@@ -249,6 +250,19 @@ class ClonaLiSAGUI(QWidget):
         self.progressOverall.setMaximum(total)
         self.progressOverall.setValue(done)
 
+    def _expected_csv_path(self) -> Path | None:
+        inp = Path(self.inp_edit.text())
+        model = Path(self.model_combo.currentText())
+        if inp.is_dir() and model.name:
+            return inp / model.name / f"{model.name}_all_data.csv"
+        return None
+
+    def _set_expected_csv(self):
+        exp = self._expected_csv_path()
+        if exp and exp.is_file():
+            self.csv_edit.setText(str(exp))
+        self._update_fixed_effect_options()
+
     def _pipeline_finished(self, model_file: Path, flow_thr: float, mask_thr: float, z_indices):
         entry = {
             'path': str(model_file), 'flow_threshold': flow_thr,
@@ -266,12 +280,14 @@ class ClonaLiSAGUI(QWidget):
         if path:
             self.inp_edit.setText(path)
             self._load_plates(path)
+            self._set_expected_csv()
 
     def _browse_model(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select model", "omnipose_models")
         if path and path not in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
             self.model_combo.addItem(path)
         self.model_combo.setCurrentText(path)
+        self._set_expected_csv()
 
     def _browse_csv(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select all_data_csv", filter="CSV Files (*.csv)")
@@ -288,6 +304,7 @@ class ClonaLiSAGUI(QWidget):
             self.mask_edit.setText(str(entry.get('mask_threshold', '')))
             if entry.get('z_indices'):
                 self.z_edit.setText(','.join(map(str, entry['z_indices'])))
+        self._set_expected_csv()
 
     def _refresh_model_combo(self):
         current = self.model_combo.currentText()
@@ -297,6 +314,7 @@ class ClonaLiSAGUI(QWidget):
             self.model_combo.addItem(entry['path'])
         self.model_combo.blockSignals(False)
         self.model_combo.setCurrentText(current)
+        self._set_expected_csv()
 
     # ------------------------------------------------------------------
     # Plate / well grid -------------------------------------------------
@@ -474,18 +492,32 @@ class ClonaLiSAGUI(QWidget):
         for plate, groups in self.group_data.items():
             wells = {w for g in groups.values() for w in g}
             for well in wells:
-                row = {"Plate": plate.replace("plate", ""), "Well": well}
+                row = {"Plate": plate, "Well": well}
                 for gname, mapping in groups.items():
                     row[gname] = mapping.get(well)
                 rows.append(row)
         if rows:
-            pd.DataFrame(rows).to_csv(Path(folder) / "group_map.csv", index=False)
+            csv_path = Path(folder) / "group_map.csv"
+            pd.DataFrame(rows).to_csv(csv_path, index=False)
             self._append_log("Saved group_map.csv")
+            model = Path(self.model_combo.currentText())
+            if model.is_file():
+                all_csv = process_masks.make_all_data_csv(folder, model.name)
+                if all_csv:
+                    self.csv_edit.setText(all_csv)
         else:
             self._append_log("No groups to save")
 
     def _update_fixed_effect_options(self):
-        groups = [self.view_combo.itemText(i) for i in range(self.view_combo.count()) if self.view_combo.itemText(i) != "Imaged Wells"]
+        csv_path = Path(self.csv_edit.text())
+        if csv_path.is_file():
+            try:
+                df = pd.read_csv(csv_path, nrows=1)
+                groups = [c[6:] for c in df.columns if c.startswith("Group-")]
+            except Exception:
+                groups = []
+        else:
+            groups = []
         self.fe1_combo.clear()
         self.fe2_combo.clear()
         self.fe1_combo.addItem("")
@@ -496,11 +528,16 @@ class ClonaLiSAGUI(QWidget):
 
     def _update_ref_levels(self):
         group = self.fe2_combo.currentText()
-        plate = self.plate_combo.currentText()
+        csv_path = Path(self.csv_edit.text())
         self.ref_level_combo.clear()
-        if plate and group and plate in self.group_data and group in self.group_data[plate]:
-            levels = sorted(set(self.group_data[plate][group].values()))
-            self.ref_level_combo.addItems(levels)
+        if csv_path.is_file() and group:
+            try:
+                col = f"Group-{group}"
+                df = pd.read_csv(csv_path, usecols=[col])
+                levels = sorted(df[col].dropna().unique())
+                self.ref_level_combo.addItems([str(v) for v in levels])
+            except Exception:
+                pass
 
     # -- config ---------------------------------------------------------------
     def _open_config(self):

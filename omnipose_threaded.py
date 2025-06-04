@@ -236,6 +236,7 @@ def run_omnipose(
     actual_num_workers = len(chunks)
 
     if progress_callback:
+        progress_callback(0, total)
         mgr = mp.Manager()
         q: mp.Queue = mgr.Queue()
     else:
