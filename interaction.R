@@ -16,19 +16,36 @@ library(tibble)
 library(gridExtra)
 library(tidyr)
 
-input_csv <- commandArgs(trailingOnly=TRUE)
+args <- commandArgs(trailingOnly=TRUE)
+input_csv <- args[1]
+fe1 <- if (length(args) >= 2) args[2] else ""
+fe2 <- if (length(args) >= 3) args[3] else ""
+interaction_flag <- if (length(args) >= 4) as.logical(as.integer(args[4])) else FALSE
+ref_level <- if (length(args) >= 5) args[5] else ""
 
-data <- read.csv(input_csv) %>%
-  mutate(well      = PlateWell,
-         genotype    = factor(Group.Line),
-         treatment = factor(Group.Treatment),
-         treatment = relevel(treatment, "DMSO"),
-         subgroup = well
-  ) %>%
-  rename(
-    time     = "Relative.Time..hrs.",
-    value    = cell_density
-  )
+raw <- read.csv(input_csv)
+if (fe1 != "") {
+  col1 <- make.names(paste0("Group-", fe1))
+  raw$genotype <- factor(raw[[col1]])
+} else {
+  raw$genotype <- factor("all")
+}
+if (fe2 != "") {
+  col2 <- make.names(paste0("Group-", fe2))
+  raw$treatment <- factor(raw[[col2]])
+  if (interaction_flag && ref_level != "")
+    raw$treatment <- relevel(raw$treatment, ref_level)
+} else {
+  raw$treatment <- factor("all")
+}
+if (ref_level == "" && fe2 != "") {
+  ref_level <- levels(raw$treatment)[1]
+}
+data <- raw %>%
+  mutate(well = PlateWell,
+         subgroup = well) %>%
+  rename(time = "Relative.Time..hrs.",
+         value = cell_density)
   # filter(time < 80 | time > 100)
 output_dir <- file.path(dirname(input_csv), "model_treatment_genotype", "logistic_growth_by_genotype")
 if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
@@ -165,8 +182,18 @@ logistic_growth <- function(time, K, r, N0) {
   K / (1 + ((K - N0) / N0) * exp(-r * time))
 }
 
-n_fix <-
-  nlevels(data$genotype) * nlevels(data$treatment)  # start-value length
+formula_str <- if (fe1 != "" && fe2 != "") {
+  if (interaction_flag) {
+    paste(fe1, "*", fe2)
+  } else {
+    paste(fe1, "+", fe2)
+  }
+} else if (fe1 != "") {
+  fe1
+} else {
+  fe2
+}
+n_fix <- ncol(model.matrix(as.formula(paste("~", formula_str)), data))
 init_K <- max(data[["value"]], na.rm = TRUE) * 1.1
 init_r <- 0.05
 
@@ -175,7 +202,7 @@ full_fit <- try(
   nlme(
     value ~ logistic_growth(shifted_time, K, r, N0),
     data    = data,
-    fixed   = list(K ~ 1, r ~ genotype * treatment),
+    fixed   = list(K ~ 1, r ~ as.formula(paste("~", formula_str))),
     random  = list(subgroup = pdDiag(r ~ 1)),
     start   = start_vals,
     na.action = na.omit,
@@ -201,7 +228,7 @@ if (inherits(full_fit, "try-error")) {
   nlme_mod <- nlme(
     value  ~ logistic_growth_fixed(shifted_time, r, N0),
     data   = data,
-    fixed  = r ~ genotype * treatment,           
+    fixed  = as.formula(paste("r ~", formula_str)),
     random = list(subgroup = pdDiag(r ~ 1)),
     start  = rep(init_r, n_fix),
     na.action = na.omit,
@@ -309,8 +336,8 @@ emm_df <- as.data.frame(emm)
 # -------------------------------------------------------------
 # 2. Identify the 0.00uM DMSO row in every genotype (= control)
 # -------------------------------------------------------------
-ctrl_df <- emm_df %>% 
-  filter(treatment == "DMSO") %>%                 # the control level
+ctrl_df <- emm_df %>%
+  filter(treatment == ref_level) %>%                 # the control level
   transmute(genotype,
             ctrl_emmean = emmean,
             ctrl_SE     = SE)
@@ -326,14 +353,14 @@ emm_df_pct <- emm_df %>%
   )
 
 ## ----- contrasts & multiplicity correction  --------------------
-cts <- contrast(emm, "trt.vs.ctrl",          # treatment – 0.00uM DMSO inside genotype
-                ref = "DMSO", by = "genotype")  # grouping factor
+cts <- contrast(emm, "trt.vs.ctrl",          # treatment vs control inside genotype
+                ref = ref_level, by = "genotype")
 
 cts_df <- summary(cts, infer = TRUE,         # adds CI and p.value
                   adjust = "bonferroni") |>
   as.data.frame() |>
   mutate(
-    treatment = str_remove(contrast, " - DMSO$"),   # "ANKRD12 - 0.00uM DMSO" → "ANKRD12"
+    treatment = str_remove(contrast, paste0(" - ", ref_level, "$")),
     signif_label = case_when(
       p.value < 0.0001 ~ "****",
       p.value < 0.001 ~ "***",
@@ -347,7 +374,7 @@ cts_df <- summary(cts, infer = TRUE,         # adds CI and p.value
 ## merge the labels back
 emm_df_pct <- emm_df_pct |>
   left_join(cts_df, by = c("genotype", "treatment")) |>
-  mutate(signif_label = if_else(treatment == "DMSO", "", signif_label))
+  mutate(signif_label = if_else(treatment == ref_level, "", signif_label))
 
 # -------------------------------------------------------------
 # 5. (optional) order treatments within each genotype by effect size
@@ -367,11 +394,11 @@ library(dplyr)
 fe <- fixef(nlme_mod)
 names(fe) <- sub("^r\\.", "", names(fe))      # drop the “r.” prefix
 
-well_tbl <- data %>% 
-  select(genotype, treatment, subgroup, well) %>% 
+well_tbl <- data %>%
+  select(genotype, treatment, subgroup, well) %>%
   distinct()
 
-mm <- model.matrix(~ genotype * treatment, data = well_tbl)
+mm <- model.matrix(as.formula(paste("~", formula_str)), data = well_tbl)
 
 # keep only the columns that survived in the fitted model
 keep_cols <- intersect(colnames(mm), names(fe))

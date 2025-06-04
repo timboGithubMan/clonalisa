@@ -1,7 +1,4 @@
 from __future__ import annotations
-from itertools import repeat
-import concurrent.futures as cf
-import random
 import time
 import os
 import json
@@ -179,6 +176,7 @@ def run_omnipose(
     save_flows: bool = False,
     save_outlines: bool = True,
     num_threads: int = 4,
+    progress_callback=None,
 ) -> Path:
     """
     Segment all .tif[f] in *directory* using the given model.
@@ -215,40 +213,45 @@ def run_omnipose(
         print("No new images to process.")
         return out_dir
 
-    random.shuffle(all_groups)
-
-    num_workers = min(num_threads, len(all_groups))
-    if num_workers == 0:
-        print("No workers to spawn (num_threads or image count is 0).")
-        return out_dir
-
-    chunks: list[list[tuple[str, list[Path]]]] = [[] for _ in range(num_workers)]
-    for i, grp in enumerate(all_groups):
-        chunks[i % num_workers].append(grp)
-
-    chunks = [chunk for chunk in chunks if chunk]
-    actual_num_workers = len(chunks)
-
-    if actual_num_workers == 0:
-        print("No images assigned to any worker.")  # Should be caught by 'if not all_groups'
-        return out_dir
-
-    print(f"Processing {len(all_groups)} images using {actual_num_workers} worker(s).")
-    
-    with cf.ProcessPoolExecutor(max_workers=actual_num_workers) as pool:
-        results = list(
-            pool.map(
-                _run_on_subset,
-                chunks,
-                repeat(model_info),
-                repeat(out_dir),
-                repeat(z_indices),
-                repeat(save_cellProb),
-                repeat(save_flows),
-                repeat(save_outlines),
+    total = len(all_groups)
+    model_filepath, flow_thresh, mask_thresh = model_info
+    model = _load_model(model_info)
+    for idx, (name, paths) in enumerate(all_groups, start=1):
+        try:
+            img = _load_and_merge(paths, z_indices)
+            img_data = [img]
+            masks_list, flows_list, _ = model.eval(
+                img_data,
+                omni=True,
+                normalize=True,
+                channels=None,
+                resample=False,
+                tile=True,
+                flow_threshold=flow_thresh,
+                mask_threshold=mask_thresh,
+                affinity_seg=True,
+                suppress=False,
             )
-        )
-
+            masks = masks_list[0]
+            flows = flows_list[0]
+            cellpose_omni.io.imwrite(out_dir / f"{name}_cp_masks.png", masks)
+            if save_cellProb and flows is not None and len(flows) > 2 and flows[2] is not None:
+                cell_prob_map = flows[2]
+                scaled_prob_map = np.clip(cell_prob_map * 21.25, 0, 255).astype(np.uint8)
+                cellpose_omni.io.imwrite(out_dir / f"{name}_cellProb.png", scaled_prob_map)
+            if save_flows and flows is not None and len(flows) > 2 and flows[0] is not None:
+                cellpose_omni.io.imwrite(out_dir / f"{name}_flows.png", flows[0].astype(np.uint8))
+            if save_outlines and masks is not None:
+                color_and_outline_cells_per_channel(out_dir / "outlines" / f"{name}_outlines.jpg", img, masks)
+            if progress_callback:
+                progress_callback(idx, total)
+            print(f"✓ {name}")
+        except Exception as e:
+            if progress_callback:
+                progress_callback(idx, total)
+            print(f"✗ {name}  (Error: {e})")
+            import traceback
+            traceback.print_exc()
 
     return out_dir
 

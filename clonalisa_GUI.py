@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QDialog, QFormLayout, QLineEdit, QDialogButtonBox
 )
 from PySide6.QtGui import QColor
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtUiTools import QUiLoader
 
 from config_utils import load_config, save_config, parse_filename
@@ -111,6 +111,53 @@ def load_ui(path: str | os.PathLike, container: QWidget):
     for obj in form.findChildren(QObject):
         if obj.objectName():
             setattr(container, obj.objectName(), obj)
+
+
+class PipelineWorker(QThread):
+    progress_overall = Signal(int, int)
+    progress_subdir = Signal(int, int)
+    log = Signal(str)
+    csv_created = Signal(str)
+
+    def __init__(self, params: dict, parent=None):
+        super().__init__(parent)
+        self.params = params
+
+    def run(self):
+        input_dir = Path(self.params['input_dir'])
+        model_info = self.params['model_info']
+        subdirs = [d for d in input_dir.iterdir() if d.is_dir() and 'epoch' not in d.name]
+        total_dirs = len(subdirs)
+        for idx, sub in enumerate(subdirs, start=1):
+            self.log.emit(f"Processing {sub.name} ({idx}/{total_dirs})")
+
+            def cb(done, total):
+                self.progress_subdir.emit(done, total)
+
+            out_dir = omnipose_threaded.run_omnipose(
+                sub,
+                model_info,
+                filter_keyword=self.params['filt'],
+                z_indices=self.params['z_indices'],
+                save_cellProb=self.params['save_cellProb'],
+                save_flows=self.params['save_flows'],
+                save_outlines=self.params['save_outlines'],
+                progress_callback=cb,
+            )
+            process_masks.process_mask_files(
+                out_dir,
+                CM_PER_PIXEL,
+                PLATE_AREAS.get(PLATE_TYPE),
+                force_save=False,
+                filter_min_size=None,
+            )
+            self.progress_overall.emit(idx, total_dirs)
+
+        all_csv = process_masks.make_all_data_csv(str(input_dir), Path(model_info[0]).name)
+        if all_csv:
+            self.csv_created.emit(all_csv)
+            self.log.emit(f"Created {all_csv}")
+        self.log.emit("Finished Omnipose pipeline")
                     
 class ClonaLiSAGUI(QWidget):
     """Main window – UI is loaded from clonalisa.ui."""
@@ -142,6 +189,10 @@ class ClonaLiSAGUI(QWidget):
         self.value_colors = {}          # { "treatmentA": QColor, ... }
         self._next_hue    = 0           # rolling hue pointer (0-359)
 
+        self.progressSubdir.setValue(0)
+        self.progressOverall.setValue(0)
+        self._update_fixed_effect_options()
+
 
         # ---------------------------------------------------------------------
 
@@ -161,6 +212,8 @@ class ClonaLiSAGUI(QWidget):
         self.btnRunOmnipose.clicked.connect(self._run_pipeline)
         self.btnRunR.clicked.connect(self._run_rscript)
         self.btnConfig.clicked.connect(self._open_config)
+        self.fe2_combo.currentIndexChanged.connect(self._update_ref_levels)
+        self.plate_combo.currentIndexChanged.connect(self._update_ref_levels)
         # ---------------------------------------------------------------------
 
         # internal state, preload model history …
@@ -187,6 +240,25 @@ class ClonaLiSAGUI(QWidget):
     def _append_log(self, text: str):
         self.log.append(text)
         self.log.ensureCursorVisible()
+
+    def _update_subdir_progress(self, done: int, total: int):
+        self.progressSubdir.setMaximum(total)
+        self.progressSubdir.setValue(done)
+
+    def _update_overall_progress(self, done: int, total: int):
+        self.progressOverall.setMaximum(total)
+        self.progressOverall.setValue(done)
+
+    def _pipeline_finished(self, model_file: Path, flow_thr: float, mask_thr: float, z_indices):
+        entry = {
+            'path': str(model_file), 'flow_threshold': flow_thr,
+            'mask_threshold': mask_thr, 'z_indices': z_indices or [],
+        }
+        self.cfg['model_history'] = [entry] + [
+            e for e in self.cfg.get('model_history', []) if e['path'] != str(model_file)
+        ]
+        save_config(self.cfg)
+        self._refresh_model_combo()
 
     # -- browse helpers --------------------------------------------------------
     def _browse_input(self):
@@ -238,6 +310,7 @@ class ClonaLiSAGUI(QWidget):
         plates = {sub.split('_')[0] for sub in os.listdir(folder)
                   if os.path.isdir(os.path.join(folder, sub))}
         self.plate_combo.addItems(sorted(plates))
+        self._update_fixed_effect_options()
 
     def _plate_selected(self, _):
         plate = self.plate_combo.currentText()
@@ -308,6 +381,7 @@ class ClonaLiSAGUI(QWidget):
             self.view_combo.addItem(name)
             # jump straight to the new group so the user can start tagging wells
             self.view_combo.setCurrentText(name)
+            self._update_fixed_effect_options()
 
     def _apply_group(self):
         plate = self.plate_combo.currentText()
@@ -328,6 +402,7 @@ class ClonaLiSAGUI(QWidget):
 
         self.value_edit.clear()
         self._update_grid()
+        self._update_ref_levels()
 
     def _save_group_map(self):
         folder = self.inp_edit.text()
@@ -346,6 +421,24 @@ class ClonaLiSAGUI(QWidget):
             self._append_log("Saved group_map.csv")
         else:
             self._append_log("No groups to save")
+
+    def _update_fixed_effect_options(self):
+        groups = [self.view_combo.itemText(i) for i in range(self.view_combo.count()) if self.view_combo.itemText(i) != "Imaged Wells"]
+        self.fe1_combo.clear()
+        self.fe2_combo.clear()
+        self.fe1_combo.addItem("")
+        self.fe2_combo.addItem("")
+        self.fe1_combo.addItems(groups)
+        self.fe2_combo.addItems(groups)
+        self._update_ref_levels()
+
+    def _update_ref_levels(self):
+        group = self.fe2_combo.currentText()
+        plate = self.plate_combo.currentText()
+        self.ref_level_combo.clear()
+        if plate and group and plate in self.group_data and group in self.group_data[plate]:
+            levels = sorted(set(self.group_data[plate][group].values()))
+            self.ref_level_combo.addItems(levels)
 
     # -- config ---------------------------------------------------------------
     def _open_config(self):
@@ -371,39 +464,23 @@ class ClonaLiSAGUI(QWidget):
                      if self.z_edit.text().strip() else None
         flow_thr   = float(self.flow_edit.text() or 0)
         mask_thr   = float(self.mask_edit.text() or 0)
-
         self._append_log("Running Omnipose…")
-        model_info = (str(model_file), flow_thr, mask_thr)
-
-        for sub in input_dir.iterdir():
-            if sub.is_dir() and "epoch" not in sub.name:
-                out_dir = omnipose_threaded.run_omnipose(
-                    str(sub), model_info, num_threads=MAX_WORKERS,
-                    filter_keyword=filt, z_indices=z_indices,
-                    save_flows=self.cb_flows.isChecked(),
-                    save_cellProb=self.cb_cellprob.isChecked(),
-                    save_outlines=self.cb_outlines.isChecked(),
-                )
-                process_masks.process_mask_files(
-                    out_dir, CM_PER_PIXEL, PLATE_AREAS.get(PLATE_TYPE),
-                    force_save=False, filter_min_size=None,
-                )
-
-        all_csv = process_masks.make_all_data_csv(str(input_dir), model_file.name)
-        if all_csv:
-            self.csv_edit.setText(all_csv)
-            self._append_log(f"Created {all_csv}")
-        self._append_log("Finished Omnipose pipeline")
-
-        entry = {
-            'path': str(model_file), 'flow_threshold': flow_thr,
-            'mask_threshold': mask_thr, 'z_indices': z_indices or [],
-        }
-        self.cfg['model_history'] = [entry] + [
-            e for e in self.cfg.get('model_history', []) if e['path'] != str(model_file)
-        ]
-        save_config(self.cfg)
-        self._refresh_model_combo()
+        params = dict(
+            input_dir=str(input_dir),
+            model_info=(str(model_file), flow_thr, mask_thr),
+            filt=filt,
+            z_indices=z_indices,
+            save_cellProb=self.cb_cellprob.isChecked(),
+            save_flows=self.cb_flows.isChecked(),
+            save_outlines=self.cb_outlines.isChecked(),
+        )
+        self.worker = PipelineWorker(params)
+        self.worker.progress_subdir.connect(self._update_subdir_progress)
+        self.worker.progress_overall.connect(self._update_overall_progress)
+        self.worker.log.connect(self._append_log)
+        self.worker.csv_created.connect(lambda p: self.csv_edit.setText(p))
+        self.worker.finished.connect(lambda: self._pipeline_finished(model_file, flow_thr, mask_thr, z_indices))
+        self.worker.start()
 
     # -- R analysis -----------------------------------------------------------
     def _run_rscript(self):
@@ -414,7 +491,12 @@ class ClonaLiSAGUI(QWidget):
         script = Path(__file__).with_name("interaction.R")
         self._append_log("Running Growth-Rate Analysis R script…")
         try:
-            out = subprocess.run(["Rscript", str(script), str(csv_path)],
+            fe1 = self.fe1_combo.currentText()
+            fe2 = self.fe2_combo.currentText()
+            interact = "1" if self.cb_interaction.isChecked() else "0"
+            ref_val = self.ref_level_combo.currentText() if self.cb_interaction.isChecked() else ""
+            args = ["Rscript", str(script), str(csv_path), fe1, fe2, interact, ref_val]
+            out = subprocess.run(args,
                                  capture_output=True, text=True, check=True)
             self._append_log(out.stdout)
             if out.stderr:
