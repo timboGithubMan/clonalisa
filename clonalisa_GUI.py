@@ -25,6 +25,8 @@ from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QStyleFactory
 
 from colorsys import hsv_to_rgb
+import matplotlib.cm      as cm
+import matplotlib.colors  as mcolors
 
 def enable_dark_palette(app):
     """Switch to Fusion style + dark palette."""
@@ -193,6 +195,7 @@ class ClonaLiSAGUI(QWidget):
 
         self.value_colors = {}          # { "treatmentA": QColor, ... }
         self._next_hue    = 0           # rolling hue pointer (0-359)
+        self._cmap = cm.get_cmap("viridis")
 
         # slider for timepoints
         self.time_slider.setVisible(False)
@@ -333,20 +336,31 @@ class ClonaLiSAGUI(QWidget):
         self._set_expected_csv()
 
     def _load_cell_density_data(self):
-        """Load cell_density information from the selected all_data CSV."""
+        """Load and average cell_density per Plate/Timepoint/Well."""
         self.cell_data.clear()
         csv_path = Path(self.csv_edit.text())
         if not csv_path.is_file():
             self._update_slider()
             return
+
         try:
-            df = pd.read_csv(csv_path, usecols=['Plate', 'Well', 'Relative Time (hrs)', 'cell_density'])
+            df = pd.read_csv(csv_path,
+                            usecols=['Plate', 'Well',
+                                    'Relative Time (hrs)', 'cell_density'])
         except Exception:
             self._update_slider()
             return
 
         df['Plate'] = df['Plate'].astype(str).str.lower()
-        for (plate, t), grp in df.groupby(['Plate', 'Relative Time (hrs)']):
+
+        # average cell_density for identical Plate-Time-Well combos
+        grouped = (
+            df.groupby(['Plate', 'Relative Time (hrs)', 'Well'],
+                    as_index=False)['cell_density']
+            .mean()
+        )
+
+        for (plate, t), grp in grouped.groupby(['Plate', 'Relative Time (hrs)']):
             mapping = dict(zip(grp['Well'], grp['cell_density']))
             self.cell_data.setdefault(plate, {})[t] = mapping
 
@@ -494,14 +508,29 @@ class ClonaLiSAGUI(QWidget):
                     if not self.timepoints:
                         mapping = {}
                     else:
-                        idx = min(self.time_slider.value(), len(self.timepoints) - 1)
-                        time = self.timepoints[idx]
+                        idx   = min(self.time_slider.value(), len(self.timepoints) - 1)
+                        time  = self.timepoints[idx]
                         mapping = self.cell_data.get(plate, {}).get(time, {})
+
+                    # normalise once for the whole plate/timepoint
+                    if mapping:
+                        vmin = min(mapping.values())
+                        vmax = max(mapping.values())
+                        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+                    else:
+                        norm = None
+
                     val = mapping.get(well)
-                    if val is not None:
-                        item.setBackground(QColor("transparent"))
+                    if val is not None and norm is not None:
+                        rgba   = self._cmap(norm(val))
+                        red, green, blue = (int(round(c*255)) for c in rgba[:3])
+                        item.setBackground(QColor(red, green, blue))
+
+                        # text & contrast
+                        luminance = 0.299*red + 0.587*green + 0.114*blue
+                        text_col  = QColor("black" if luminance > 128 else "white")
+                        item.setForeground(text_col)
                         item.setText(f"{val:.2f}")
-                        item.setForeground(QColor("white"))
                     else:
                         item.setBackground(QColor("transparent"))
                         item.setText("")
