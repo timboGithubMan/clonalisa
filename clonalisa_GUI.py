@@ -175,6 +175,8 @@ class ClonaLiSAGUI(QWidget):
         self.cfg         = load_config()
         self.plate_wells = {}   # { plate: {A1, B3, ...} }
         self.group_data  = {}   # { plate: {group: {well: value}} }
+        self.cell_data   = {}   # { plate: {timepoint: {well: density}} }
+        self.timepoints  = []   # sorted list of timepoints for current plate
         # -----------------------------------------------------------------------
 
         # ----- post-load tweaks Designer can’t express -----------------------
@@ -187,10 +189,16 @@ class ClonaLiSAGUI(QWidget):
         self.table.setVerticalHeaderLabels([chr(ord('A') + i) for i in range(8)])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.installEventFilter(self) 
+        self.table.installEventFilter(self)
 
         self.value_colors = {}          # { "treatmentA": QColor, ... }
         self._next_hue    = 0           # rolling hue pointer (0-359)
+
+        # slider for timepoints
+        self.time_slider.setVisible(False)
+        self.time_slider.setMinimum(0)
+        self.time_slider.setMaximum(0)
+        self.time_slider.valueChanged.connect(self._update_grid)
 
         self.progressSubdir.setValue(0)
         self.progressOverall.setValue(0)
@@ -219,13 +227,17 @@ class ClonaLiSAGUI(QWidget):
         self.fe2_combo.currentIndexChanged.connect(self._update_ref_levels)
         self.plate_combo.currentIndexChanged.connect(self._update_ref_levels)
         self.csv_edit.textChanged.connect(self._update_fixed_effect_options)
+        self.csv_edit.textChanged.connect(self._load_cell_density_data)
         # ---------------------------------------------------------------------
 
         # internal state, preload model history …
         self.cfg         = load_config()
         self.plate_wells = {}
         self.group_data  = {}
+        self.cell_data   = {}
+        self.timepoints  = []
         self._model_selected(0)
+        self._load_cell_density_data()
 
     # ==========================================================================
     # ---------------------------- helper slots --------------------------------
@@ -320,6 +332,41 @@ class ClonaLiSAGUI(QWidget):
         self.model_combo.setCurrentText(current)
         self._set_expected_csv()
 
+    def _load_cell_density_data(self):
+        """Load cell_density information from the selected all_data CSV."""
+        self.cell_data.clear()
+        csv_path = Path(self.csv_edit.text())
+        if not csv_path.is_file():
+            self._update_slider()
+            return
+        try:
+            df = pd.read_csv(csv_path, usecols=['Plate', 'Well', 'Relative Time (hrs)', 'cell_density'])
+        except Exception:
+            self._update_slider()
+            return
+
+        df['Plate'] = df['Plate'].astype(str).str.lower()
+        for (plate, t), grp in df.groupby(['Plate', 'Relative Time (hrs)']):
+            mapping = dict(zip(grp['Well'], grp['cell_density']))
+            self.cell_data.setdefault(plate, {})[t] = mapping
+
+        self._update_slider()
+
+    def _update_slider(self):
+        """Configure the time slider for the currently selected plate."""
+        plate = self.plate_combo.currentText()
+        times = sorted(self.cell_data.get(plate, {}).keys())
+        self.timepoints = times
+        if len(times) > 1 and self.view_combo.currentText() == 'Cell Density':
+            self.time_slider.setVisible(True)
+            self.time_slider.setMaximum(len(times) - 1)
+            if self.time_slider.value() > len(times) - 1:
+                self.time_slider.setValue(0)
+        else:
+            self.time_slider.setVisible(False)
+            self.time_slider.setMaximum(0)
+            self.time_slider.setValue(0)
+
     # ------------------------------------------------------------------
     # Plate / well grid -------------------------------------------------
     # ------------------------------------------------------------------
@@ -339,6 +386,7 @@ class ClonaLiSAGUI(QWidget):
         self.plate_combo.clear()
         self.view_combo.clear()
         self.view_combo.addItem("Imaged Wells")
+        self.view_combo.addItem("Cell Density")
         self.table.clearContents()
         self.plate_wells.clear()
         self.group_data.clear()
@@ -413,6 +461,7 @@ class ClonaLiSAGUI(QWidget):
                             wells.add(well)
                 break
         self.plate_wells[plate] = wells
+        self._update_slider()
         self._update_grid()
 
     def _index_to_well(self, row: int, col: int) -> str:
@@ -425,11 +474,12 @@ class ClonaLiSAGUI(QWidget):
 
         view  = self.view_combo.currentText()
         wells = self.plate_wells.get(plate, set())
+        self._update_slider()
 
         for r in range(8):
             for c in range(12):
                 item = self.table.item(r, c)
-                if item is None:                          
+                if item is None:
                     item = QTableWidgetItem()
                     self.table.setItem(r, c, item)
 
@@ -440,6 +490,21 @@ class ClonaLiSAGUI(QWidget):
                     item.setBackground(
                         QColor("lightgreen" if well in wells else "lightgray")
                     )
+                elif view == "Cell Density":
+                    if not self.timepoints:
+                        mapping = {}
+                    else:
+                        idx = min(self.time_slider.value(), len(self.timepoints) - 1)
+                        time = self.timepoints[idx]
+                        mapping = self.cell_data.get(plate, {}).get(time, {})
+                    val = mapping.get(well)
+                    if val is not None:
+                        item.setBackground(QColor("transparent"))
+                        item.setText(f"{val:.2f}")
+                        item.setForeground(QColor("white"))
+                    else:
+                        item.setBackground(QColor("transparent"))
+                        item.setText("")
                 else:
                     mapping = self.group_data.get(plate, {}).get(view, {})
                     val     = mapping.get(well)

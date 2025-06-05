@@ -727,10 +727,17 @@
            <column/>
           </widget>
          </item>
-        </layout>
-       </item>
-      </layout>
-     </widget>
+         <item>
+          <widget class="QSlider" name="time_slider">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+          </widget>
+         </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
     </widget>
    </item>
   </layout>
