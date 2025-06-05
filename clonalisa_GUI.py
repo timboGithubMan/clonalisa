@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QDialog, QFormLayout, QLineEdit, QDialogButtonBox
 )
 from PySide6.QtGui import QColor
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QThread, QEvent
 from PySide6.QtUiTools import QUiLoader
 
 from config_utils import load_config, save_config, parse_filename
@@ -73,6 +73,7 @@ class ConfigDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Configuration")
+        self.resize(800, 50)
         self.cfg = load_config()
 
         layout = QFormLayout(self)
@@ -167,6 +168,7 @@ class ClonaLiSAGUI(QWidget):
         # ----- load the .ui file ------------------------------------------------
         ui_path = Path(__file__).with_name("clonalisa_ui.ui")
         load_ui(ui_path, self)  
+        self.resize(1600, 900)
         # -----------------------------------------------------------------------
 
         # internal state --------------------------------------------------------
@@ -185,6 +187,7 @@ class ClonaLiSAGUI(QWidget):
         self.table.setVerticalHeaderLabels([chr(ord('A') + i) for i in range(8)])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.installEventFilter(self) 
 
         self.value_colors = {}          # { "treatmentA": QColor, ... }
         self._next_hue    = 0           # rolling hue pointer (0-359)
@@ -193,6 +196,7 @@ class ClonaLiSAGUI(QWidget):
         self.progressOverall.setValue(0)
         self._update_fixed_effect_options()
 
+        # self.mainSplitter.setSizes([0, 1])    # "1" = take the rest
 
         # ---------------------------------------------------------------------
 
@@ -545,6 +549,36 @@ class ClonaLiSAGUI(QWidget):
             except Exception:
                 pass
 
+    def eventFilter(self, obj, ev):
+        if obj is self.table and ev.type() == QEvent.KeyPress and ev.key() == Qt.Key_Backspace:
+            self._clear_group_selection()                       # own helper (below)
+            return True                                         # swallow event
+        return super().eventFilter(obj, ev)
+
+    def _clear_group_selection(self):
+        plate = self.plate_combo.currentText()
+        group = self.view_combo.currentText()
+
+        # don’t touch the default view or empty selections
+        if group == "Imaged Wells" or not plate:
+            return
+
+        sel = self.table.selectedIndexes()
+        if not sel:
+            return
+
+        mapping = self.group_data.get(plate, {}).get(group, {})
+        for idx in sel:
+            well = self._index_to_well(idx.row(), idx.column())
+            mapping.pop(well, None)                              # delete if present
+
+        # drop empty group maps to keep things tidy
+        if mapping == {}:
+            self.group_data[plate].pop(group, None)
+
+        self._update_grid()
+        self._update_ref_levels()
+
     # -- config ---------------------------------------------------------------
     def _open_config(self):
         dlg = ConfigDialog(self)
@@ -617,6 +651,7 @@ def main():
     enable_dark_palette(app)
     gui = ClonaLiSAGUI()
     gui.show()
+    gui._browse_input()
     sys.exit(app.exec())
 
 
