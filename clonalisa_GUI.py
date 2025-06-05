@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QTableWidget, QTableWidgetItem,
     QInputDialog, QDialog, QFormLayout, QLineEdit, QDialogButtonBox
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPixmap, QPainter, QBrush
 from PySide6.QtCore import Qt, Signal, QThread, QEvent
 from PySide6.QtUiTools import QUiLoader
 
@@ -271,6 +271,23 @@ class ClonaLiSAGUI(QWidget):
         fg = QColor("black" if luminance > 128 else "white")
         return bg, fg
 
+    def _position_pixmap(self, values: list[float], norm: mcolors.Normalize) -> QPixmap:
+        """Return a pixmap with quadrants coloured per position value."""
+        n = len(values)
+        # square grid size (e.g. 4 -> 2x2)
+        side = int(max(1, round(n ** 0.5)))
+        size = 20
+        cell = size // side
+        pix = QPixmap(size, size)
+        painter = QPainter(pix)
+        for i, val in enumerate(values):
+            row = i // side
+            col = i % side
+            bg, _ = self._heatmap_colors(val, norm)
+            painter.fillRect(col * cell, row * cell, cell, cell, bg)
+        painter.end()
+        return pix
+
     # -- generic --------------------------------------------------------------
     def _append_log(self, text: str):
         self.log.append(text)
@@ -408,7 +425,8 @@ class ClonaLiSAGUI(QWidget):
     def _update_slider(self):
         """Configure the time slider for the currently selected plate."""
         plate = self.plate_combo.currentText()
-        times = sorted(self.cell_data.get(plate, {}).keys())
+        plate_key = plate.lower()
+        times = sorted(self.cell_data.get(plate_key, {}).keys())
         self.timepoints = times
         if len(times) > 1 and self.view_combo.currentText() == 'Cell Density':
             self.time_slider.setVisible(True)
@@ -452,7 +470,7 @@ class ClonaLiSAGUI(QWidget):
                 os.path.isdir(os.path.join(folder, sub))
                 and '_' in sub
                 and not sub.lower().startswith('model')
-                and not sub.lower() in {'10x', '20x', '40x'}
+                and 'epoch' not in sub.lower()
             )
         }
 
@@ -504,6 +522,7 @@ class ClonaLiSAGUI(QWidget):
 
     def _plate_selected(self, _):
         plate = self.plate_combo.currentText()
+        plate_key = plate.lower()
         if not plate:
             return
         input_dir = self.inp_edit.text()
@@ -555,12 +574,12 @@ class ClonaLiSAGUI(QWidget):
                     else:
                         idx   = min(self.time_slider.value(), len(self.timepoints) - 1)
                         time  = self.timepoints[idx]
-                        mapping = self.cell_data.get(plate, {}).get(time, {})
+                        mapping = self.cell_data.get(plate_key, {}).get(time, {})
 
                         if self.cb_share_plate.isChecked():
                             df_scope = self.raw_cell_df
                         else:
-                            df_scope = self.raw_cell_df[self.raw_cell_df['Plate'] == plate]
+                            df_scope = self.raw_cell_df[self.raw_cell_df['Plate'] == plate_key]
                         if not self.cb_share_time.isChecked():
                             df_scope = df_scope[df_scope['Relative Time (hrs)'] == time]
 
@@ -573,13 +592,17 @@ class ClonaLiSAGUI(QWidget):
 
                     val = mapping.get(well)
                     if val is not None and norm is not None:
-                        num = sum(val)/len(val) if isinstance(val, list) else val
-                        bg, fg = self._heatmap_colors(num, norm)
-                        item.setBackground(bg)
-                        item.setForeground(fg)
                         if isinstance(val, list):
-                            item.setText(", ".join(f"{v:.2f}" for v in val))
+                            pix = self._position_pixmap(val, norm)
+                            item.setBackground(QBrush(pix))
+                            mean_val = sum(val) / len(val)
+                            _, fg = self._heatmap_colors(mean_val, norm)
+                            item.setForeground(fg)
+                            item.setText("\n".join(f"{v:.2f}" for v in val))
                         else:
+                            bg, fg = self._heatmap_colors(val, norm)
+                            item.setBackground(bg)
+                            item.setForeground(fg)
                             item.setText(f"{val:.2f}")
                     else:
                         item.setBackground(QColor("transparent"))
