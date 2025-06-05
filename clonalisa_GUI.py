@@ -4,6 +4,7 @@ from pathlib import Path
 
 import omnipose_threaded, process_masks
 import pandas as pd
+import math
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QTableWidget, QTableWidgetItem,
@@ -275,7 +276,7 @@ class ClonaLiSAGUI(QWidget):
         """Return a pixmap with quadrants coloured per position value."""
         n = len(values)
         # square grid size (e.g. 4 -> 2x2)
-        side = int(max(1, round(n ** 0.5)))
+        side = int(max(1, math.ceil(n ** 0.5)))
         size = 20
         cell = size // side
         pix = QPixmap(size, size)
@@ -391,7 +392,8 @@ class ClonaLiSAGUI(QWidget):
                 self._update_slider()
                 return
 
-        df['Plate'] = df['Plate'].astype(str).str.lower()
+        df['Plate'] = df['Plate'].astype(str).str.lower().str.strip()
+        df['Position'] = pd.to_numeric(df['Position'], errors='coerce').fillna(1).astype(int)
         self.raw_cell_df = df
         self._compute_aggregated_data()
 
@@ -406,8 +408,17 @@ class ClonaLiSAGUI(QWidget):
         mode = self.agg_combo.currentIndex()
 
         if mode == 2:  # per position
-            grouped = (df.groupby(['Plate', 'Relative Time (hrs)', 'Well'])
-                         ['cell_density'].apply(list).reset_index())
+            pos_means = (
+                df.groupby(['Plate', 'Relative Time (hrs)', 'Well', 'Position'], as_index=False)['cell_density']
+                  .mean()
+            )
+            grouped = (
+                pos_means
+                .sort_values('Position')
+                .groupby(['Plate', 'Relative Time (hrs)', 'Well'])['cell_density']
+                .apply(list)
+                .reset_index()
+            )
         elif mode == 1:  # median
             grouped = (df.groupby(['Plate', 'Relative Time (hrs)', 'Well'],
                                  as_index=False)['cell_density'].median())
