@@ -656,6 +656,27 @@
           </layout>
          </item>
          <item>
+          <layout class="QHBoxLayout" name="heatmap_options">
+           <item>
+            <widget class="QComboBox" name="agg_combo">
+             <item><property name="text"><string>Mean per Well</string></property></item>
+             <item><property name="text"><string>Median per Well</string></property></item>
+             <item><property name="text"><string>Per Position</string></property></item>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="cb_share_time">
+             <property name="text"><string>Share scale across timepoints</string></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="cb_share_plate">
+             <property name="text"><string>Share scale across plates</string></property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item>
           <widget class="QTableWidget" name="table">
            <property name="sizePolicy">
             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
