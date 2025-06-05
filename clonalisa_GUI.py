@@ -25,7 +25,7 @@ from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QStyleFactory
 
 from colorsys import hsv_to_rgb
-import matplotlib.cm      as cm
+import matplotlib as mpl
 import matplotlib.colors  as mcolors
 
 def enable_dark_palette(app):
@@ -196,7 +196,7 @@ class ClonaLiSAGUI(QWidget):
 
         self.value_colors = {}          # { "treatmentA": QColor, ... }
         self._next_hue    = 0           # rolling hue pointer (0-359)
-        self._cmap = cm.get_cmap("viridis")
+        self._cmap = mpl.colormaps.get_cmap("viridis")
 
         # slider for timepoints
         self.time_slider.setVisible(False)
@@ -546,6 +546,7 @@ class ClonaLiSAGUI(QWidget):
 
     def _update_grid(self):
         plate = self.plate_combo.currentText()
+        plate_key = plate.lower()
         if not plate:
             return
 
@@ -568,7 +569,7 @@ class ClonaLiSAGUI(QWidget):
                         QColor("lightgreen" if well in wells else "lightgray")
                     )
                 elif view == "Cell Density":
-                    if not self.timepoints:
+                    if not self.timepoints or self.raw_cell_df is None:
                         mapping = {}
                         norm = None
                     else:
