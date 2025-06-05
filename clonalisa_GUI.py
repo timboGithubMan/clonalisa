@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QTableWidget, QTableWidgetItem,
     QInputDialog, QDialog, QFormLayout, QLineEdit, QDialogButtonBox
 )
-from PySide6.QtGui import QColor, QPixmap, QPainter, QBrush
+from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, Signal, QThread, QEvent
 from PySide6.QtUiTools import QUiLoader
 
@@ -25,7 +25,7 @@ from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QStyleFactory
 
 from colorsys import hsv_to_rgb
-import matplotlib as mpl
+import matplotlib.cm      as cm
 import matplotlib.colors  as mcolors
 
 def enable_dark_palette(app):
@@ -177,8 +177,7 @@ class ClonaLiSAGUI(QWidget):
         self.cfg         = load_config()
         self.plate_wells = {}   # { plate: {A1, B3, ...} }
         self.group_data  = {}   # { plate: {group: {well: value}} }
-        self.cell_data   = {}   # aggregated data {plate:{time:{well:val}}}
-        self.raw_cell_df = None  # original dataframe
+        self.cell_data   = {}   # { plate: {timepoint: {well: density}} }
         self.timepoints  = []   # sorted list of timepoints for current plate
         # -----------------------------------------------------------------------
 
@@ -196,7 +195,7 @@ class ClonaLiSAGUI(QWidget):
 
         self.value_colors = {}          # { "treatmentA": QColor, ... }
         self._next_hue    = 0           # rolling hue pointer (0-359)
-        self._cmap = mpl.colormaps.get_cmap("viridis")
+        self._cmap = cm.get_cmap("viridis")
 
         # slider for timepoints
         self.time_slider.setVisible(False)
@@ -207,11 +206,6 @@ class ClonaLiSAGUI(QWidget):
         self.progressSubdir.setValue(0)
         self.progressOverall.setValue(0)
         self._update_fixed_effect_options()
-
-        # aggregation & heatmap options
-        self.agg_combo.currentIndexChanged.connect(self._compute_aggregated_data)
-        self.cb_share_time.stateChanged.connect(self._update_grid)
-        self.cb_share_plate.stateChanged.connect(self._update_grid)
 
         # self.mainSplitter.setSizes([0, 1])    # "1" = take the rest
 
@@ -261,32 +255,6 @@ class ClonaLiSAGUI(QWidget):
             r, g, b = hsv_to_rgb(h, 0.45, 0.85)  # pastel-ish
             self.value_colors[val] = QColor(int(r*255), int(g*255), int(b*255))
         return self.value_colors[val]
-
-    def _heatmap_colors(self, val: float, norm: mcolors.Normalize) -> tuple[QColor, QColor]:
-        """Return background and text colors for a numeric value."""
-        rgba = self._cmap(norm(val))
-        red, green, blue = (int(round(c*255)) for c in rgba[:3])
-        bg = QColor(red, green, blue)
-        luminance = 0.299*red + 0.587*green + 0.114*blue
-        fg = QColor("black" if luminance > 128 else "white")
-        return bg, fg
-
-    def _position_pixmap(self, values: list[float], norm: mcolors.Normalize) -> QPixmap:
-        """Return a pixmap with quadrants coloured per position value."""
-        n = len(values)
-        # square grid size (e.g. 4 -> 2x2)
-        side = int(max(1, round(n ** 0.5)))
-        size = 20
-        cell = size // side
-        pix = QPixmap(size, size)
-        painter = QPainter(pix)
-        for i, val in enumerate(values):
-            row = i // side
-            col = i % side
-            bg, _ = self._heatmap_colors(val, norm)
-            painter.fillRect(col * cell, row * cell, cell, cell, bg)
-        painter.end()
-        return pix
 
     # -- generic --------------------------------------------------------------
     def _append_log(self, text: str):
@@ -368,65 +336,40 @@ class ClonaLiSAGUI(QWidget):
         self._set_expected_csv()
 
     def _load_cell_density_data(self):
-        """Load cell_density data from CSV and compute aggregates."""
+        """Load and average cell_density per Plate/Timepoint/Well."""
         self.cell_data.clear()
         csv_path = Path(self.csv_edit.text())
         if not csv_path.is_file():
-            self.raw_cell_df = None
             self._update_slider()
             return
 
         try:
             df = pd.read_csv(csv_path,
-                            usecols=['Plate', 'Well', 'Relative Time (hrs)',
-                                     'cell_density', 'Position'])
+                            usecols=['Plate', 'Well',
+                                    'Relative Time (hrs)', 'cell_density'])
         except Exception:
-            try:
-                df = pd.read_csv(csv_path,
-                                usecols=['Plate', 'Well',
-                                         'Relative Time (hrs)', 'cell_density'])
-                df['Position'] = 1
-            except Exception:
-                self.raw_cell_df = None
-                self._update_slider()
-                return
-
-        df['Plate'] = df['Plate'].astype(str).str.lower()
-        self.raw_cell_df = df
-        self._compute_aggregated_data()
-
-    def _compute_aggregated_data(self):
-        """Recompute aggregated cell data according to agg_combo setting."""
-        self.cell_data.clear()
-        if self.raw_cell_df is None:
             self._update_slider()
             return
 
-        df = self.raw_cell_df
-        mode = self.agg_combo.currentIndex()
+        df['Plate'] = df['Plate'].astype(str).str.lower()
 
-        if mode == 2:  # per position
-            grouped = (df.groupby(['Plate', 'Relative Time (hrs)', 'Well'])
-                         ['cell_density'].apply(list).reset_index())
-        elif mode == 1:  # median
-            grouped = (df.groupby(['Plate', 'Relative Time (hrs)', 'Well'],
-                                 as_index=False)['cell_density'].median())
-        else:  # mean
-            grouped = (df.groupby(['Plate', 'Relative Time (hrs)', 'Well'],
-                                 as_index=False)['cell_density'].mean())
+        # average cell_density for identical Plate-Time-Well combos
+        grouped = (
+            df.groupby(['Plate', 'Relative Time (hrs)', 'Well'],
+                    as_index=False)['cell_density']
+            .mean()
+        )
 
         for (plate, t), grp in grouped.groupby(['Plate', 'Relative Time (hrs)']):
             mapping = dict(zip(grp['Well'], grp['cell_density']))
             self.cell_data.setdefault(plate, {})[t] = mapping
 
         self._update_slider()
-        self._update_grid()
 
     def _update_slider(self):
         """Configure the time slider for the currently selected plate."""
         plate = self.plate_combo.currentText()
-        plate_key = plate.lower()
-        times = sorted(self.cell_data.get(plate_key, {}).keys())
+        times = sorted(self.cell_data.get(plate, {}).keys())
         self.timepoints = times
         if len(times) > 1 and self.view_combo.currentText() == 'Cell Density':
             self.time_slider.setVisible(True)
@@ -466,12 +409,7 @@ class ClonaLiSAGUI(QWidget):
         discovered_plates = {
             sub.split('_')[0]
             for sub in os.listdir(folder)
-            if (
-                os.path.isdir(os.path.join(folder, sub))
-                and '_' in sub
-                and not sub.lower().startswith('model')
-                and 'epoch' not in sub.lower()
-            )
+            if os.path.isdir(os.path.join(folder, sub))
         }
 
         # ---------- 2) optionally load group_map.csv ----------------
@@ -522,7 +460,6 @@ class ClonaLiSAGUI(QWidget):
 
     def _plate_selected(self, _):
         plate = self.plate_combo.currentText()
-        plate_key = plate.lower()
         if not plate:
             return
         input_dir = self.inp_edit.text()
@@ -546,7 +483,6 @@ class ClonaLiSAGUI(QWidget):
 
     def _update_grid(self):
         plate = self.plate_combo.currentText()
-        plate_key = plate.lower()
         if not plate:
             return
 
@@ -569,42 +505,32 @@ class ClonaLiSAGUI(QWidget):
                         QColor("lightgreen" if well in wells else "lightgray")
                     )
                 elif view == "Cell Density":
-                    if not self.timepoints or self.raw_cell_df is None:
+                    if not self.timepoints:
                         mapping = {}
-                        norm = None
                     else:
                         idx   = min(self.time_slider.value(), len(self.timepoints) - 1)
                         time  = self.timepoints[idx]
-                        mapping = self.cell_data.get(plate_key, {}).get(time, {})
+                        mapping = self.cell_data.get(plate, {}).get(time, {})
 
-                        if self.cb_share_plate.isChecked():
-                            df_scope = self.raw_cell_df
-                        else:
-                            df_scope = self.raw_cell_df[self.raw_cell_df['Plate'] == plate_key]
-                        if not self.cb_share_time.isChecked():
-                            df_scope = df_scope[df_scope['Relative Time (hrs)'] == time]
-
-                        if not df_scope.empty:
-                            vmin = df_scope['cell_density'].min()
-                            vmax = df_scope['cell_density'].max()
-                            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-                        else:
-                            norm = None
+                    # normalise once for the whole plate/timepoint
+                    if mapping:
+                        vmin = min(mapping.values())
+                        vmax = max(mapping.values())
+                        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+                    else:
+                        norm = None
 
                     val = mapping.get(well)
                     if val is not None and norm is not None:
-                        if isinstance(val, list):
-                            pix = self._position_pixmap(val, norm)
-                            item.setBackground(QBrush(pix))
-                            mean_val = sum(val) / len(val)
-                            _, fg = self._heatmap_colors(mean_val, norm)
-                            item.setForeground(fg)
-                            item.setText("\n".join(f"{v:.2f}" for v in val))
-                        else:
-                            bg, fg = self._heatmap_colors(val, norm)
-                            item.setBackground(bg)
-                            item.setForeground(fg)
-                            item.setText(f"{val:.2f}")
+                        rgba   = self._cmap(norm(val))
+                        red, green, blue = (int(round(c*255)) for c in rgba[:3])
+                        item.setBackground(QColor(red, green, blue))
+
+                        # text & contrast
+                        luminance = 0.299*red + 0.587*green + 0.114*blue
+                        text_col  = QColor("black" if luminance > 128 else "white")
+                        item.setForeground(text_col)
+                        item.setText(f"{val:.2f}")
                     else:
                         item.setBackground(QColor("transparent"))
                         item.setText("")

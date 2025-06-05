@@ -588,115 +588,70 @@
        <item>
         <layout class="QVBoxLayout" name="layoutPlate">
          <item>
-          <layout class="QHBoxLayout" name="plate_params">
+          <layout class="QHBoxLayout" name="plate_selector">
            <item>
-            <layout class="QVBoxLayout" name="plate_groups">
-             <item>
-              <layout class="QHBoxLayout" name="plate_selector">
-               <item>
-                <widget class="QLabel" name="labelPlate">
-                 <property name="sizePolicy">
-                  <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-                   <horstretch>0</horstretch>
-                   <verstretch>0</verstretch>
-                  </sizepolicy>
-                 </property>
-                 <property name="text">
-                  <string>Plate:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QComboBox" name="plate_combo">
-                 <property name="sizePolicy">
-                  <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-                   <horstretch>0</horstretch>
-                   <verstretch>0</verstretch>
-                  </sizepolicy>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <layout class="QHBoxLayout" name="group_params">
-               <item>
-                <widget class="QPushButton" name="btnNewGroup">
-                 <property name="text">
-                  <string>New Group</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QComboBox" name="view_combo">
-                 <item>
-                  <property name="text">
-                   <string>Imaged Wells</string>
-                  </property>
-                 </item>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="value_edit">
-                 <property name="placeholderText">
-                  <string>Value</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="btnApplyGroup">
-                 <property name="text">
-                  <string>Apply</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="btnSaveGroups">
-                 <property name="text">
-                  <string>Save Groups</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-            </layout>
+            <widget class="QLabel" name="labelPlate">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="text">
+              <string>Plate:</string>
+             </property>
+            </widget>
            </item>
            <item>
-            <layout class="QVBoxLayout" name="view_options">
+            <widget class="QComboBox" name="plate_combo">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item>
+          <layout class="QHBoxLayout" name="plate_grouping">
+           <item>
+            <widget class="QPushButton" name="btnNewGroup">
+             <property name="text">
+              <string>New Group</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="view_combo">
              <item>
-              <widget class="QComboBox" name="agg_combo">
-               <item>
-                <property name="text">
-                 <string>Mean per Well</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Median per Well</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Per Position</string>
-                </property>
-               </item>
-              </widget>
+              <property name="text">
+               <string>Imaged Wells</string>
+              </property>
              </item>
-             <item>
-              <widget class="QCheckBox" name="cb_share_plate">
-               <property name="text">
-                <string>Share scale across plates</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QCheckBox" name="cb_share_time">
-               <property name="text">
-                <string>Share scale across timepoints</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="value_edit">
+             <property name="placeholderText">
+              <string>Value</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btnApplyGroup">
+             <property name="text">
+              <string>Apply</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btnSaveGroups">
+             <property name="text">
+              <string>Save Groups</string>
+             </property>
+            </widget>
            </item>
           </layout>
          </item>
@@ -775,14 +730,14 @@
          <item>
           <widget class="QSlider" name="time_slider">
            <property name="orientation">
-            <enum>Qt::Orientation::Horizontal</enum>
+            <enum>Qt::Horizontal</enum>
            </property>
           </widget>
          </item>
-        </layout>
-       </item>
-      </layout>
-     </widget>
+         </layout>
+        </item>
+       </layout>
+      </widget>
     </widget>
    </item>
   </layout>
