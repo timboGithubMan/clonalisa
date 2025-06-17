@@ -16,41 +16,29 @@
 >> conda install git
 >> ```
 
-## Step 1 — Setup environment
+## Step 1 - Setup Environment
 
-```bash
-conda create -y -n clonalisa -c conda-forge python=3.10.12 r-base=4.3 r-ggplot2 r-dplyr r-stringr r-forcats r-tidyr r-tibble r-nlme r-emmeans r-broom.mixed r-gridextra r-codetools
-conda activate clonalisa
-```
+#### Option 1: GPU Install
 
-## Step 2 — Install PyTorch
+>> ```bash
+>> conda create -y -n clonalisa -c conda-forge python=3.10.12 r-base=4.3 r-ggplot2 r-dplyr r-stringr r-forcats r-tidyr r-tibble r-nlme r-emmeans r-broom.mixed r-gridextra r-codetools cupy=13.4 cuda-version=12.8 cuda-nvrtc=12.8
+>> conda activate clonalisa
+>> pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+>> ```
 
-Pick **one** command that matches your hardware:
+#### Option 2: CPU-only
+>> ```bash
+>> conda create -y -n clonalisa -c conda-forge python=3.10.12 r-base=4.3 r-ggplot2 r-dplyr r-stringr r-forcats r-tidyr r-tibble r-nlme r-emmeans r-broom.mixed r-gridextra r-codetools
+>> conda activate clonalisa
+>> pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+>> ```
 
-#### • CPU-only
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-```
-
-#### • CUDA 11.8 — most GPUs
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-```
-
-#### • CUDA 12.x — RTX 5000-series & newer
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-```
-
-## Step 3 — Install ClonaLiSA
+## Step 2 — Install ClonaLiSA
 ```bash
 git clone https://github.com/timboGithubMan/clonalisa
 cd clonalisa
 pip install -e .
 ```
 
-## Step 4
+## Step 3
 watch your colonies self-organize into turquoise WGCNA cults
